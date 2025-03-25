@@ -9,7 +9,8 @@
         "loadSettings": "",
         "socketio": ":setSocketIO",
         "eejsBlock_mySettings": "",
-        "eejsBlock_styles": ""
+        "eejsBlock_styles": "",
+        "expressCreateServer" : ""
       },
       "client_hooks": {
         "handleClientMessage_RTC_MESSAGE": "ep_webrtc/static/js",

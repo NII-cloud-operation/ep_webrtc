@@ -15,34 +15,14 @@
  */
 'use strict';
 
+const SoraClient = require('./soraClient');
 require('./adapter');
 const padcookie = require('ep_etherpad-lite/static/js/pad_cookie').padcookie;
 
 let enableDebugLogging = false;
 const debug = (...args) => { if (enableDebugLogging) console.debug('ep_webrtc:', ...args); };
 
-const EventTargetPolyfill = (() => {
-  try {
-    new class extends EventTarget { constructor() { super(); } }();
-    return EventTarget;
-  } catch (err) {
-    debug('Browser does not support extending EventTarget, using a workaround. Error:', err);
-    // Crude, but works well enough.
-    return class {
-      constructor() {
-        const delegate = document.createDocumentFragment();
-        for (const fn of ['addEventListener', 'dispatchEvent', 'removeEventListener']) {
-          this[fn] = (...args) => delegate[fn](...args);
-        }
-      }
-    };
-  }
-})();
-
-// Used to help remote peers detect when this user reloads the page.
-const sessionId = Date.now();
-// Incremented each time a new RTCPeerConnection is created.
-let nextInstanceId = 0;
+const EventTargetPolyfill = require('./eventTargetPolyfill');
 
 const logErrorToServer = async (err, delay = 10000) => {
   // Sleep to avoid logging benign errors caused by the user leaving the page (e.g., audio/video
@@ -144,50 +124,14 @@ class ClosedEvent extends CustomEvent {
 //   * 'closed' (see ClosedEvent): Emitted when the PeerState is closed, except when closed by a
 //     call to close(). The PeerState must not be used after it is closed.
 class PeerState extends EventTargetPolyfill {
-  constructor(pcConfig, caller, sendMessage, localTracks, debug) {
+  constructor(sendMessage, localTracks, debug) {
     super();
-    this._pcConfig = pcConfig;
-    this._caller = caller;
-    this._sendMessage = (msg) => sendMessage(Object.assign({ids: this._ids}, msg));
+    this._sendMessage = (msg) => sendMessage(msg);
     this._localTracks = localTracks;
-    this._failedSLDAttempts = 0;
     this._debug = debug;
     this._debug(`I am the ${this._caller ? 'calling' : 'answering'} peer`);
-    this._ids = {
-      from: {
-        // Only changes when the user reloads the page.
-        session: sessionId,
-        // Increased when WebRTC renegotiation is necessary due to an error.
-        instance: 0,
-      },
-    };
     this._closed = false;
-    this._pc = null;
-    this._xcvrs = {};
     this._remoteStream = null;
-    this._ontrackchanged = async ({oldTrack, newTrack}) => {
-      const {kind} = oldTrack || newTrack;
-      await this._sendLocalTrack(kind, newTrack);
-    };
-    this._localTracks.addEventListener('trackchanged', this._ontrackchanged);
-  }
-
-  async _sendLocalTrack(kind, track) {
-    if (this._pc == null || this._pc.connectionState === 'closed') return;
-    const {sender: {track: old} = {}} = this._xcvrs[kind] || {};
-    if ((old == null && track == null) || old === track) return;
-    this._debug(
-        `replacing ${kind} track ${old ? old.id : '(null)'} with ${track ? track.id : '(null)'}`);
-    const xcvr = this._xcvrs[kind];
-    if (!xcvr) return;
-    try {
-      if (track != null) xcvr.direction = 'sendrecv'; // Will throw if not already bidirectional.
-      await xcvr.sender.replaceTrack(track);
-    } catch (err) {
-      this._debug('renegotiation is required');
-      this._resetConnection(err);
-      return;
-    }
   }
 
   _setRemoteStream(stream) {
@@ -203,188 +147,27 @@ class PeerState extends EventTargetPolyfill {
     }
   }
 
-  _resetConnection(err = null, peerIds = null) {
-    if (err != null) {
-      this._debug('resetting connection due to error:', err);
-      logErrorToServer(err);
-    }
-    if (this._closed) {
-      this._debug('ignoring _resetConnection() on closed PeerState');
-      return;
-    }
-    this._debug('creating RTCPeerConnection with config', this._pcConfig);
-    this._debug('peer IDs:', peerIds);
-    this._setRemoteStream(null);
-    this._ids.from.instance = ++nextInstanceId;
-    this._ids.to = peerIds;
-    const pc = new RTCPeerConnection(this._pcConfig);
-    pc.addEventListener('track', async ({track, transceiver}) => {
-      this._debug(`Received ${track.kind} track from peer, ID: ${track.id}`);
-      const stream = this._remoteStream || new MediaStream();
-      stream.addTrack(track);
-      this._setRemoteStream(stream);
-      if (!this._caller) {
-        this._xcvrs[track.kind] = transceiver;
-        // _sendLocalTrack might call _resetConnection, so it should be called last.
-        await this._sendLocalTrack(track.kind, this._localTracks.getTracks(track.kind)[0]);
-      }
-    });
-    pc.addEventListener('icecandidate', ({candidate}) => this._sendMessage({candidate}));
-    pc.addEventListener('negotiationneeded', async () => {
-      try {
-        await pc.setLocalDescription();
-        this._failedSLDAttempts = 0;
-        this._sendMessage({description: pc.localDescription});
-      } catch (err) {
-        console.error('Error setting local description:', err);
-        if (++this._failedSLDAttempts > 10) throw err; // Avoid an infinite loop.
-        this._resetConnection(err);
-        return;
-      }
-    });
-    pc.addEventListener('connectionstatechange', () => {
-      this._debug(`connection state changed to ${pc.connectionState}`);
-      switch (pc.connectionState) {
-        case 'closed':
-          this._resetConnection(new Error('connectionState changed to closed'));
-          break;
-        case 'connected':
-          if (this._remoteStream == null) this._setRemoteStream(this._disconnectedRemoteStream);
-          break;
-        case 'disconnected':
-          // Unfortunately, if the peer reconnects later there might not be a track event that can
-          // be used to re-add the stream. Stash the stream so that it can be reused on reconnect.
-          this._disconnectedRemoteStream = this._remoteStream;
-          this._setRemoteStream(null);
-          break;
-        // From reading the spec it is not clear what the possible state transitions are, but it
-        // seems that on at least Chrome 90 the 'failed' state is terminal (it can never go back to
-        // working) so a new RTCPeerConnection must be made.
-        case 'failed':
-          this._resetConnection(new Error('connectionState changed to failed'));
-          break;
-      }
-    });
-    pc.addEventListener('iceconnectionstatechange', () => {
-      this._debug(`ICE connection state changed to ${pc.iceConnectionState}`);
-      switch (pc.iceConnectionState) {
-        case 'failed':
-          // Chrome 65 and other old browsers don't have pc.restartIce(). Ignore the failure on
-          // those browsers; the connection state should transition to failed which will trigger a
-          // call to this._resetConnection().
-          if (typeof pc.restartIce === 'function') pc.restartIce();
-          break;
-      }
-    });
-    // RTCPeerConnection.peerIdentity is mentioned in https://www.w3.org/TR/webrtc-identity/ but as
-    // of 2021-06-24 only Firefox supports it.
-    if (pc.peerIdentity != null) {
-      // Silence "InvalidStateError: RTCPeerConnection is gone (did you enter Offline mode?)"
-      // unhandled Promise rejection errors in Firefox. This can happen if Firefox drops the
-      // connection because the pad is in an idle/background tab.
-      pc.peerIdentity.catch((err) => this._debug('Failed to assert peer identity:', err));
-    }
-
-    if (this._pc != null) this._pc.close();
-    this._pc = pc;
-    this._xcvrs = {};
-
-    if (this._caller) {
-      // Adding transceivers triggers negotiation with the peer, which we want to do as soon as
-      // possible to warm up the peer connection (ICE takes a while). Adding a track implicitly adds
-      // a transceiver so we could do that instead, but:
-      //
-      //   * We might not have a local track yet (maybe the user hasn't yet allowed access to the
-      //     camera/mic).
-      //   * Using a dummy silence track until a real track is ready might result in two
-      //     unidirectional SDP m-lines (one in each direction) instead of a single bidirectional
-      //     m-line. This seems to trigger an echo bug in Safari.
-      //
-      // Using transceivers to warm up the connection is the approach taken in:
-      // https://www.w3.org/TR/2021/REC-webrtc-20210126/#advanced-peer-to-peer-example-with-warm-up
-      // Also see: https://webrtcstandards.info/ice-warm-up-m-line-webrtc-transceivers/
-      Promise.all(['audio', 'video'].map(async (t) => {
-        this._debug(`adding ${t} transceiver`);
-        this._xcvrs[t] = this._pc.addTransceiver(t);
-        await this._sendLocalTrack(t, this._localTracks.getTracks(t)[0]);
-      }));
-    } else {
-      // It is possible that the last invite sent to the peer was sent before the peer was ready to
-      // accept invites, so the peer might not know that it should call now. Send another invite
-      // just in case. The peer will ignore any superfluous invites.
-      this._sendMessage({invite: 'invite'});
-    }
+  trackStream(stream) {
+    this._debug(`Received stream from peer, ID: ${stream.id}`);
+    this._setRemoteStream(stream);
   }
 
   async receiveMessage(msg) {
     if (this._closed) return this._debug('Ignoring message because PeerState is closed');
-    const {ids, candidate, description, hangup} = msg;
+    const {hangup} = msg;
     if (hangup != null) {
       this.close(true);
-      return;
-    }
-    if (ids != null) {
-      const {
-        session: wantSession = this._ids.from.session,
-        instance: wantInstance = this._ids.from.instance,
-      } = ids.to || {};
-      if (wantSession !== this._ids.from.session || wantInstance !== this._ids.from.instance) {
-        this._debug('dropping message intended for a different instance');
-        this._debug('current IDs:', this._ids.from);
-        return;
-      }
-      for (const idType of ['session', 'instance']) {
-        const newId = (ids.from || {})[idType];
-        const currentId = (this._ids.to || {})[idType];
-        if (currentId == null || newId === currentId) continue;
-        if (newId == null || newId < currentId) return;
-        // The remote peer reloaded the page or experienced an error. Destroy and recreate the local
-        // RTCPeerConnection to avoid browser quirks caused by state mismatches.
-        this._resetConnection(new Error(
-            `remote peer forced WebRTC renegotiation via new ${idType} ID ` +
-            `(old ID ${currentId}, new ID ${newId})`), ids.from);
-        break;
-      }
-      this._ids.to = ids.from;
-    }
-    if (this._pc == null) this._resetConnection(null, this._ids.to);
-    try {
-      if (description != null) {
-        await this._pc.setRemoteDescription(description);
-        if (description.type === 'offer') {
-          await this._pc.setLocalDescription();
-          this._sendMessage({description: this._pc.localDescription});
-        }
-      }
-      if (candidate != null) await this._pc.addIceCandidate(candidate);
-    } catch (err) {
-      err.peerMessage = msg;
-      console.error('Error processing message from peer:', err);
-      this._resetConnection(err);
-      return;
     }
   }
 
   close(emitClosedEvent = false) {
     if (this._closed) return;
     this._closed = true;
-    this._localTracks.removeEventListener('trackchanged', this._ontrackchanged);
-    if (this._pc != null) this._pc.close();
-    this._pc = null;
     this._setRemoteStream(null);
     this._sendMessage({hangup: 'hangup'});
     if (emitClosedEvent) this.dispatchEvent(new ClosedEvent());
   }
 }
-
-const isCaller = (myId, otherId) => {
-  // Compare user IDs to determine which of the two users will initiate the call.
-  const caller = myId.localeCompare(otherId) < 0;
-  if ((otherId.localeCompare(myId) < 0) === caller) {
-    throw new Error(`Peer ID ${otherId} compares equivalent to own ID ${myId}`);
-  }
-  return caller;
-};
 
 // Periods in element IDs make it hard to build a selector string because period is for class match.
 const getVideoId = (userId) => `video_${userId.replace(/\./g, '_')}`;
@@ -402,6 +185,7 @@ exports.rtc = new class {
   constructor() {
     this._activated = null;
     this._settings = null;
+    this._soraClient = null;
     this._localTracks = new LocalTracks();
     this._localTracks.addEventListener('trackchanged', ({oldTrack, newTrack}) => {
       // Normally the self-view UI only needs to be updated if the user clicks on something, but it
@@ -417,6 +201,12 @@ exports.rtc = new class {
       if (newTrack == null) logErrorToServer(new Error(`Local ${kind} track ended unexpectedly`));
       ($videoContainer.data('updateMinSize') || (() => {}))();
 
+      if(this._soraClient != null) {
+        // Replace sora client local track.
+        debug("*replace sora client local track.")
+        this._soraClient.replaceLocalTrack(newTrack);
+      }
+
       // Update the audio/video buttons to reflect the new state.
       if (newTrack != null) return;
       switch (oldTrack.kind) {
@@ -429,6 +219,8 @@ exports.rtc = new class {
     });
     this._pad = null;
     this._peers = new Map();
+    this._clientIdToUserId = new Map();  // clientId -> userId
+    this._pendingRemoteStreams = new Map();
     // Populated with convenience methods once the self-view interface is created.
     this._selfViewButtons = {};
     // When grabbing both locks the audio lock must be grabbed first to avoid deadlock.
@@ -519,7 +311,6 @@ exports.rtc = new class {
     const {userId} = userInfo;
     debug(`(peer ${userId}) join or update`);
     if (!this._activated || !userId) return;
-    if (userId !== this.getUserId()) this.invitePeer(userId);
     this.updatePeerNameAndColor(userInfo);
   }
 
@@ -530,9 +321,27 @@ exports.rtc = new class {
 
   handleClientMessage_RTC_MESSAGE(hookName, {payload: {from, data}}) {
     debug(`(peer ${from}) received message`, data);
-    if (this._activated && from !== this.getUserId() &&
-        (this._peers.has(from) || data.hangup == null)) {
-      this.getPeerConnection(from).receiveMessage(data);
+    const { publish, clientId, needsReply } = data;
+    if (publish != null && clientId != null) {
+      if  (from !== this.getUserId()) {
+        debug(`*add cliend id ${clientId} to user id ${from}`);
+        this._clientIdToUserId.set(clientId, from);
+        if (needsReply) {
+          debug(`*reply my client id to user id ${from}`);
+          this.publish(from, false);
+        }
+        const remoteStream = this._pendingRemoteStreams.get(clientId);
+        if (remoteStream != null) {
+          debug(`*track stored stream ${clientId}`)
+          this.getPeerConnection(from).trackStream(remoteStream);
+          this._pendingRemoteStreams.delete(clientId);
+        }
+      }
+    } else {
+      if (this._activated && from !== this.getUserId() &&
+          (this._peers.has(from) || data.hangup == null)) {
+        this.getPeerConnection(from).receiveMessage(data);
+      }
     }
     return [null];
   }
@@ -543,7 +352,11 @@ exports.rtc = new class {
     if (!userInfo) return;
     const {userId, name = html10n.get('pad.userlist.unnamed'), colorId = 0} = userInfo;
     const $videoContainer = $(`#container_${getVideoId(userId)}`);
-    if ($videoContainer.length === 0) return;
+    if ($videoContainer.length === 0) {
+      debug(`(no video containter: ${userInfo.userId})`)
+      return;
+    }
+    debug(`(has video containter: ${userInfo.userId})`)
     $videoContainer.find('.user-name').attr('title', name).text(name);
     const color = typeof colorId === 'number' ? clientVars.colorPalette[colorId] : colorId;
     $videoContainer.css({borderLeftColor: color});
@@ -719,12 +532,31 @@ exports.rtc = new class {
           $('#rtcbox').css('display', 'flex');
           padcookie.setPref('rtcEnabled', true);
           this.hangupAll();
-          this.invitePeer(null); // Broadcast an invite to everyone.
           await this.setStream(this.getUserId(), this._localTracks.stream);
           await this.updateLocalTracks({
             updateAudio: this._settings.audio.disabled !== 'hard',
             updateVideo: this._settings.video.disabled !== 'hard',
           });
+          // initialize sora client
+          this._soraClient = new SoraClient(
+            this._settings.signalingUrls,
+            `${this._pad.getPadId()}@${this._settings.projectId}`
+          );
+          this._soraClient.addEventListener("track", (e) => {
+            const remoteStream = e.detail.streams[0];
+            const userId = this._clientIdToUserId.get(remoteStream.id);
+            if (userId == null) {
+              // store remote stream until receiving client id of this user
+              debug(`*store remote stream ${remoteStream.id}`)
+              this._pendingRemoteStreams.set(remoteStream.id, remoteStream);
+              return;
+            }
+            debug(`*find user id ${userId} of stream ${remoteStream.id}`)
+            this.getPeerConnection(userId).trackStream(remoteStream);
+          });
+          await this._soraClient.connect(this._localTracks.stream);
+          debug(`*sora client connected, my clientid is ${this._soraClient.clientId}`);
+          this.publish(null, true);
         } finally {
           $checkbox.prop('disabled', false);
         }
@@ -1212,9 +1044,6 @@ exports.rtc = new class {
   }
 
   sendMessage(to, data) {
-    if (data.ids == null) data.ids = {};
-    if (data.ids.from == null) data.ids.from = {};
-    data.ids.from.session = sessionId;
     debug(`(${to == null ? 'to everyone on the pad' : `peer ${to}`}) sending message`, data);
     this._pad.collabClient.sendMessage({
       type: 'RTC_MESSAGE',
@@ -1228,6 +1057,7 @@ exports.rtc = new class {
     // connection with. This prevents inconsistent state if the user disables WebRTC after an invite
     // is sent but before the remote peer initiates the connection.
     this.sendMessage(null, {hangup: 'hangup'});
+    this._soraClient?.disconnect();
   }
 
   getUserId() {
@@ -1243,16 +1073,16 @@ exports.rtc = new class {
     this._peers.delete(userId);
   }
 
-  // See if the peer is interested in establishing a WebRTC connection. If the peer isn't interested
-  // it will ignore the invite; if it is interested, it will either initiate a WebRTC connection (if
-  // it has a track to stream) or it send back an invite of its own (if it doesn't have a track to
-  // stream). If an uninterested peer later becomes interested, the peer will send an invite.
-  //
-  // DO NOT connect to the peer unless invited by the peer because an uninterested peer will discard
-  // the WebRTC signaling messages. This is bad because WebRTC assumes reliable, in-order delivery
-  // of signaling messages, so the discards will break future connection attempts.
-  invitePeer(userId) {
-    this.sendMessage(userId, {invite: 'invite'});
+  // 自分の情報(userId, sora client id)を公開する
+  // needsReply: publishを受け取ったユーザーは、publishを返す必要があるか？
+  publish(userId, needsReply = false) {
+    if(this._soraClient?.clientId != null) {
+      this.sendMessage(userId, {
+        publish: 'publish', 
+        clientId: this._soraClient.clientId,
+        needsReply: needsReply
+      });
+    }
   }
 
   getPeerConnection(userId) {
@@ -1261,8 +1091,6 @@ exports.rtc = new class {
       const _debug = (...args) => debug(`(peer ${userId})`, ...args);
       _debug('creating PeerState');
       peer = new PeerState(
-          {iceServers: this._settings.iceServers},
-          isCaller(this.getUserId(), userId),
           (msg) => this.sendMessage(userId, msg),
           this._localTracks,
           _debug);
@@ -1297,7 +1125,7 @@ exports.rtc = new class {
         //
         // TODO: Figure out if the delay can be safely removed. If not, cancel the timeout if the
         // peer leaves the pad or the plugin is deactivated.
-        setTimeout(() => this.invitePeer(userId), 500 * Math.random() + 500);
+        setTimeout(() => this.publish(userId, true), 500 * Math.random() + 500);
       });
     }
     return peer;
