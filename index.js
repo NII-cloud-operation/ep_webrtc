@@ -19,7 +19,7 @@ const eejs = require('ep_etherpad-lite/node/eejs/');
 const sessioninfos = require('ep_etherpad-lite/node/handler/PadMessageHandler').sessioninfos;
 const stats = require('ep_etherpad-lite/node/stats');
 const util = require('util');
-const { SignJWT } = require('jose');
+const {SignJWT} = require('jose');
 
 let logger = {};
 for (const level of ['debug', 'info', 'warn', 'error']) {
@@ -53,15 +53,6 @@ const defaultSettings = {
 };
 let settings = null;
 let socketio;
-
-const addContextToError = (err, pfx) => {
-  const newErr = new Error(`${pfx}${err.message}`, {cause: err});
-  if (Error.captureStackTrace) Error.captureStackTrace(newErr, addContextToError);
-  // Check for https://github.com/tc39/proposal-error-cause support, available in Node.js >= v16.10.
-  if (newErr.cause === err) return newErr;
-  err.message = `${pfx}${err.message}`;
-  return err;
-};
 
 // Copied from:
 // https://github.com/ether/etherpad-lite/blob/f95b09e0b6752a0d226d58d8b246831164dc9533/src/node/handler/PadMessageHandler.js#L1411-L1420
@@ -130,12 +121,10 @@ const handleErrorStatMessage = (statName) => {
   }
 };
 
-exports.clientVars = async (hookName, {clientVars: {userId: authorId}, pad: {id: padId}}) => {
-  return {ep_webrtc: {
-    ...settings,
-    apiKey: "*****", // api key must be secret.
-  }};
-};
+exports.clientVars = async (hookName, context) => ({ep_webrtc: {
+  ...settings,
+  apiKey: '*****', // api key must be secret.
+}});
 
 exports.handleMessage = async (hookName, {message, socket}) => {
   if (message.type === 'COLLABROOM' && message.data.type === 'RTC_MESSAGE') {
@@ -198,30 +187,30 @@ exports.loadSettings = async (hookName, {settings: {ep_webrtc: s = {}}}) => {
 };
 
 exports.expressCreateServer = (hookName, args, cb) => {
-  logger.info("expressCreateServer");
-  const { app } = args;
-  app.get("/ep_webrtc/generate_jwt", (req, res) => {
-    const apiKey = settings?.apiKey ?? "";
-    const { channelId } = req.params;
+  logger.info('expressCreateServer');
+  const {app} = args;
+  app.get('/ep_webrtc/generate_jwt', (req, res) => {
+    const apiKey = settings?.apiKey ?? '';
+    const {channelId} = req.params;
     (new SignJWT({
       channel_id: channelId,
     })
-      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-      .setExpirationTime("30s")
-      .sign(new TextEncoder().encode(apiKey)))
-      .then((jwt) => {
-        res.send(jwt);
-      })
-      .catch((err) => {
-        console.error(
-          "[ep_webrtc]",
-          "Error occurred",
-          err.stack || err.message || String(err)
-        );
-        res.status(500).send({
-          error: err.toString(),
+        .setProtectedHeader({alg: 'HS256', typ: 'JWT'})
+        .setExpirationTime('30s')
+        .sign(new TextEncoder().encode(apiKey)))
+        .then((jwt) => {
+          res.send(jwt);
+        })
+        .catch((err) => {
+          console.error(
+              '[ep_webrtc]',
+              'Error occurred',
+              err.stack || err.message || String(err),
+          );
+          res.status(500).send({
+            error: err.toString(),
+          });
         });
-      });
   });
   return cb();
 };

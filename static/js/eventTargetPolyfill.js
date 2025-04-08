@@ -1,9 +1,10 @@
+'use strict';
+
 const EventTargetPolyfill = (() => {
   try {
     new class extends EventTarget { constructor() { super(); } }();
     return EventTarget;
   } catch (err) {
-    debug('Browser does not support extending EventTarget, using a workaround. Error:', err);
     // Crude, but works well enough.
     return class {
       constructor() {

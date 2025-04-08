@@ -201,9 +201,9 @@ exports.rtc = new class {
       if (newTrack == null) logErrorToServer(new Error(`Local ${kind} track ended unexpectedly`));
       ($videoContainer.data('updateMinSize') || (() => {}))();
 
-      if(this._soraClient != null) {
+      if (this._soraClient != null) {
         // Replace sora client local track.
-        debug("*replace sora client local track.")
+        debug('*replace sora client local track.');
         this._soraClient.replaceLocalTrack(newTrack);
       }
 
@@ -219,7 +219,7 @@ exports.rtc = new class {
     });
     this._pad = null;
     this._peers = new Map();
-    this._clientIdToUserId = new Map();  // clientId -> userId
+    this._clientIdToUserId = new Map(); // clientId -> userId
     this._pendingRemoteStreams = new Map();
     // Populated with convenience methods once the self-view interface is created.
     this._selfViewButtons = {};
@@ -238,9 +238,9 @@ exports.rtc = new class {
     this._windows = [window, outerWin, innerWin];
     this._pad = pad;
     // pad event
-    this._pad.socket.on("disconnect", () => {
+    this._pad.socket.on('disconnect', () => {
       // disconnect.
-      debug("pad is disconnected, hangup all");
+      debug('pad is disconnected, hangup all');
       this.hangupAll();
     });
     this._settings = clientVars.ep_webrtc;
@@ -327,9 +327,9 @@ exports.rtc = new class {
 
   handleClientMessage_RTC_MESSAGE(hookName, {payload: {from, data}}) {
     debug(`(peer ${from}) received message`, data);
-    const { publish, clientId, needsReply } = data;
+    const {publish, clientId, needsReply} = data;
     if (publish != null && clientId != null) {
-      if  (from !== this.getUserId()) {
+      if (from !== this.getUserId()) {
         debug(`*add cliend id ${clientId} to user id ${from}`);
         this._clientIdToUserId.set(clientId, from);
         if (needsReply) {
@@ -338,16 +338,14 @@ exports.rtc = new class {
         }
         const remoteStream = this._pendingRemoteStreams.get(clientId);
         if (remoteStream != null) {
-          debug(`*track stored stream ${clientId}`)
+          debug(`*track stored stream ${clientId}`);
           this.getPeerConnection(from).trackStream(remoteStream);
           this._pendingRemoteStreams.delete(clientId);
         }
       }
-    } else {
-      if (this._activated && from !== this.getUserId() &&
+    } else if (this._activated && from !== this.getUserId() &&
           (this._peers.has(from) || data.hangup == null)) {
-        this.getPeerConnection(from).receiveMessage(data);
-      }
+      this.getPeerConnection(from).receiveMessage(data);
     }
     return [null];
   }
@@ -359,10 +357,10 @@ exports.rtc = new class {
     const {userId, name = html10n.get('pad.userlist.unnamed'), colorId = 0} = userInfo;
     const $videoContainer = $(`#container_${getVideoId(userId)}`);
     if ($videoContainer.length === 0) {
-      debug(`(no video containter: ${userInfo.userId})`)
+      debug(`(no video containter: ${userInfo.userId})`);
       return;
     }
-    debug(`(has video containter: ${userInfo.userId})`)
+    debug(`(has video containter: ${userInfo.userId})`);
     $videoContainer.find('.user-name').attr('title', name).text(name);
     const color = typeof colorId === 'number' ? clientVars.colorPalette[colorId] : colorId;
     $videoContainer.css({borderLeftColor: color});
@@ -545,19 +543,19 @@ exports.rtc = new class {
           });
           // initialize sora client
           this._soraClient = new SoraClient(
-            this._settings.signalingUrls,
-            `${this._pad.getPadId()}@${this._settings.projectId}`
+              this._settings.signalingUrls,
+              `${this._pad.getPadId()}@${this._settings.projectId}`
           );
-          this._soraClient.addEventListener("track", (e) => {
+          this._soraClient.addEventListener('track', (e) => {
             const remoteStream = e.detail.streams[0];
             const userId = this._clientIdToUserId.get(remoteStream.id);
             if (userId == null) {
               // store remote stream until receiving client id of this user
-              debug(`*store remote stream ${remoteStream.id}`)
+              debug(`*store remote stream ${remoteStream.id}`);
               this._pendingRemoteStreams.set(remoteStream.id, remoteStream);
               return;
             }
-            debug(`*find user id ${userId} of stream ${remoteStream.id}`)
+            debug(`*find user id ${userId} of stream ${remoteStream.id}`);
             this.getPeerConnection(userId).trackStream(remoteStream);
           });
           await this._soraClient.connect(this._localTracks.stream);
@@ -1063,7 +1061,7 @@ exports.rtc = new class {
     // connection with. This prevents inconsistent state if the user disables WebRTC after an invite
     // is sent but before the remote peer initiates the connection.
     this.sendMessage(null, {hangup: 'hangup'});
-    this._soraClient?.disconnect();
+    if (this._soraClient) this._soraClient.disconnect();
   }
 
   getUserId() {
@@ -1082,11 +1080,11 @@ exports.rtc = new class {
   // 自分の情報(userId, sora client id)を公開する
   // needsReply: publishを受け取ったユーザーは、publishを返す必要があるか？
   publish(userId, needsReply = false) {
-    if(this._soraClient?.clientId != null) {
+    if (this._soraClient && this._soraClient.clientId != null) {
       this.sendMessage(userId, {
-        publish: 'publish', 
+        publish: 'publish',
         clientId: this._soraClient.clientId,
-        needsReply: needsReply
+        needsReply,
       });
     }
   }
