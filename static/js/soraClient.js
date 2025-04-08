@@ -39,6 +39,7 @@ class SoraClient extends EventTargetPolyfill {
   }
 
   async replaceLocalTrack(newTrack) {
+    if (newTrack == null) return;
     let transceiver = null;
     if (newTrack.kind === 'video') {
       transceiver = this.connection.getVideoTransceiver();

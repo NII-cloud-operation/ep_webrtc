@@ -201,7 +201,7 @@ exports.rtc = new class {
       if (newTrack == null) logErrorToServer(new Error(`Local ${kind} track ended unexpectedly`));
       ($videoContainer.data('updateMinSize') || (() => {}))();
 
-      if (this._soraClient != null) {
+      if (this._soraClient != null && newTrack != null) {
         // Replace sora client local track.
         debug('*replace sora client local track.');
         this._soraClient.replaceLocalTrack(newTrack);
