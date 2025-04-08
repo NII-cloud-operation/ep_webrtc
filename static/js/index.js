@@ -237,6 +237,12 @@ exports.rtc = new class {
     const innerWin = outerWin.document.querySelector('iframe[name="ace_inner"]').contentWindow;
     this._windows = [window, outerWin, innerWin];
     this._pad = pad;
+    // pad event
+    this._pad.socket.on("disconnect", () => {
+      // disconnect.
+      debug("pad is disconnected, hangup all");
+      this.hangupAll();
+    });
     this._settings = clientVars.ep_webrtc;
     if (this._settings == null || this._settings.configError) {
       $.gritter.add({
