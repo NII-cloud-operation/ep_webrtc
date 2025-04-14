@@ -148,7 +148,7 @@ class PeerState extends EventTargetPolyfill {
   }
 
   trackStream(stream) {
-    this._debug(`Received stream from peer, ID: ${stream.id}`);
+    this._debug(`Received stream from peer, ID: ${stream ? stream.id : 'null'}`);
     this._setRemoteStream(stream);
   }
 
@@ -240,8 +240,9 @@ exports.rtc = new class {
     // pad event
     this._pad.socket.on('disconnect', () => {
       // disconnect.
-      debug('pad is disconnected, hangup all');
-      this.hangupAll();
+      debug('*pad is disconnected');
+      if (this._soraClient) this._soraClient.disconnect();
+      for (const userId of this._peers.keys()) this.getPeerConnection(userId).trackStream(null);
     });
     this._settings = clientVars.ep_webrtc;
     if (this._settings == null || this._settings.configError) {
