@@ -129,7 +129,6 @@ class PeerState extends EventTargetPolyfill {
     this._sendMessage = (msg) => sendMessage(msg);
     this._localTracks = localTracks;
     this._debug = debug;
-    this._debug(`I am the ${this._caller ? 'calling' : 'answering'} peer`);
     this._closed = false;
     this._remoteStream = null;
   }
