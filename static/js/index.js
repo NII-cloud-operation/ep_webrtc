@@ -528,7 +528,7 @@ exports.rtc = new class {
       if (updateVideo) this._trackLocks.video.unlock();
       if (updateAudio) this._trackLocks.audio.unlock();
     }
-    // For some browsers, audio stream is not played without video stream, 
+    // For some browsers, audio stream is not played without video stream,
     // so add video stream with dummy canvas.
     await this._trackLocks.video.lock();
     if (this._localTracks.stream.getVideoTracks().length === 0) {
@@ -543,19 +543,19 @@ exports.rtc = new class {
   }
 
   createDummyCanvasStream() {
-    if(!this._dummyCanvasStream) {
+    if (!this._dummyCanvasStream) {
       this._dummyCanvas = document.createElement('canvas');
       const canvasWidth = 160;
       const canvasHeight = 120;
       this._dummyCanvas.width = canvasWidth;
       this._dummyCanvas.height = canvasHeight;
       const ctx = this._dummyCanvas.getContext('2d');
-      ctx.fillStyle = "#000000";
+      ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       this._dummyCanvasTimerId = setInterval(() => {
-        if(this._dummyCanvas) {
+        if (this._dummyCanvas) {
           const ctx = this._dummyCanvas.getContext('2d');
-          ctx.fillStyle = "#000000";
+          ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, this._dummyCanvas.width, this._dummyCanvas.height);
         }
       }, 1000);
@@ -565,7 +565,7 @@ exports.rtc = new class {
   }
 
   disposeDummyCanvasStream() {
-    if(this._dummyCanvasTimerId) {
+    if (this._dummyCanvasTimerId) {
       clearInterval(this._dummyCanvasTimerId);
       this._dummyCanvasTimerId = null;
     }
