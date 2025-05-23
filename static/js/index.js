@@ -530,11 +530,13 @@ exports.rtc = new class {
     }
     // For some browsers, audio stream is not played without video stream, 
     // so add video stream with dummy canvas.
+    await this._trackLocks.video.lock();
     if (this._localTracks.stream.getVideoTracks().length === 0) {
       const dummyVideoTrack = this.createDummyCanvasStream().getVideoTracks()[0];
       this._localTracks.setTrack(dummyVideoTrack.kind, dummyVideoTrack);
       this._localTracks.videoIsDummy = true;
     }
+    this._trackLocks.video.unlock();
     // For most browsers, autoplay with audio is allowed if the user grants access to the camera or
     // microphone, so unmuting auto-muted videos is likely to succeed.
     await this.unmuteAndPlayAll();
@@ -630,7 +632,6 @@ exports.rtc = new class {
       padcookie.setPref('rtcEnabled', false);
       this.hangupAll();
       this.setStream(this.getUserId(), null);
-      this.disposeDummyCanvasStream();
       const $rtcbox = $('#rtcbox');
       $rtcbox.empty(); // In case any peer videos didn't get cleaned up for some reason.
       $rtcbox.hide();
@@ -640,6 +641,7 @@ exports.rtc = new class {
         for (const track of this._localTracks.stream.getTracks()) {
           this._localTracks.setTrack(track.kind, null);
         }
+        this.disposeDummyCanvasStream();
       } finally {
         this._trackLocks.video.unlock();
         this._trackLocks.audio.unlock();
