@@ -333,7 +333,7 @@ exports.rtc = new class {
   handleClientMessage_RTC_MESSAGE(hookName, {payload: {from, data}}) {
     debug(`(peer ${from}) received message`, data);
     const {publish, clientId, needsReply} = data;
-    if (publish != null && clientId != null) {
+    if (this._activated && publish != null && clientId != null) {
       if (from !== this.getUserId()) {
         debug(`*add cliend id ${clientId} to user id ${from}`);
         this._clientIdToUserId.set(clientId, from);
@@ -545,8 +545,8 @@ exports.rtc = new class {
   createDummyCanvasStream() {
     if(!this._dummyCanvasStream) {
       this._dummyCanvas = document.createElement('canvas');
-      const canvasWidth = Math.max(160, this._settings.video.constraints?.width?.ideal ?? 0);
-      const canvasHeight = Math.max(120, this._settings.video.constraints?.height?.ideal ?? 0);
+      const canvasWidth = 160;
+      const canvasHeight = 120;
       this._dummyCanvas.width = canvasWidth;
       this._dummyCanvas.height = canvasHeight;
       const ctx = this._dummyCanvas.getContext('2d');
