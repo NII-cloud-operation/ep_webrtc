@@ -26,6 +26,13 @@ class SoraClient extends EventTargetPolyfill {
     this.connection.on('removetrack', (event) => {
       this.dispatchEvent(new CustomEvent('removeTrack', {detail: event}));
     });
+    this.connection.on('notify', (event) => {
+      if (event.event_type === 'spotlight.focused') {
+        this.dispatchEvent(new CustomEvent('focused', {detail: event}));
+      } else if (event.event_type === 'spotlight.unfocused') {
+        this.dispatchEvent(new CustomEvent('unfocused', {detail: event}));
+      }
+    });
   }
 
   async connect(stream) {
