@@ -65,6 +65,7 @@ class LocalTracks extends EventTargetPolyfill {
     super();
     Object.defineProperty(this, 'stream', {value: new MediaStream(), writeable: false});
     this.videoIsScreenshare = false;
+    this.videoIsDummy = false;
   }
 
   getTracks(kind) {
@@ -224,6 +225,10 @@ exports.rtc = new class {
     this._selfViewButtons = {};
     // When grabbing both locks the audio lock must be grabbed first to avoid deadlock.
     this._trackLocks = {audio: new Mutex(), video: new Mutex()};
+    // for dummy canvas stream
+    this._dummyCanvasStream = null;
+    this._dummyCanvas = null;
+    this._dummyCanvasTimerId = null;
   }
 
   get enableDebugLogging() { return enableDebugLogging; }
@@ -328,7 +333,7 @@ exports.rtc = new class {
   handleClientMessage_RTC_MESSAGE(hookName, {payload: {from, data}}) {
     debug(`(peer ${from}) received message`, data);
     const {publish, clientId, needsReply} = data;
-    if (publish != null && clientId != null) {
+    if (this._activated && publish != null && clientId != null) {
       if (from !== this.getUserId()) {
         debug(`*add cliend id ${clientId} to user id ${from}`);
         this._clientIdToUserId.set(clientId, from);
@@ -493,7 +498,7 @@ exports.rtc = new class {
       if (addAudioTrack) devices.push('mic');
       const addVideoTrack = updateVideo && this._selfViewButtons.video.enabled &&
           (!this._localTracks.stream.getVideoTracks().some((t) => t.readyState === 'live') ||
-           this._localTracks.videoIsScreenshare);
+           this._localTracks.videoIsScreenshare || this._localTracks.videoIsDummy);
       if (addVideoTrack) devices.push('cam');
       const addScreenshareTrack = updateVideo && this._selfViewButtons.screenshare.enabled &&
           !this._selfViewButtons.video.enabled && // Video button overrides screenshare button.
@@ -534,6 +539,9 @@ exports.rtc = new class {
             for (const track of stream.getTracks()) {
               if (track.kind === 'video') {
                 this._localTracks.videoIsScreenshare = devices.includes('screen');
+                this._localTracks.videoIsDummy = false;
+                // dummy video stream is no longer needed
+                this.disposeDummyCanvasStream();
               }
               this._localTracks.setTrack(track.kind, track);
             }
@@ -565,9 +573,49 @@ exports.rtc = new class {
       if (updateVideo) this._trackLocks.video.unlock();
       if (updateAudio) this._trackLocks.audio.unlock();
     }
+    // For some browsers, audio stream is not played without video stream,
+    // so add video stream with dummy canvas.
+    await this._trackLocks.video.lock();
+    if (this._localTracks.stream.getVideoTracks().length === 0) {
+      const dummyVideoTrack = this.createDummyCanvasStream().getVideoTracks()[0];
+      this._localTracks.setTrack(dummyVideoTrack.kind, dummyVideoTrack);
+      this._localTracks.videoIsDummy = true;
+    }
+    this._trackLocks.video.unlock();
     // For most browsers, autoplay with audio is allowed if the user grants access to the camera or
     // microphone, so unmuting auto-muted videos is likely to succeed.
     await this.unmuteAndPlayAll();
+  }
+
+  createDummyCanvasStream() {
+    if (!this._dummyCanvasStream) {
+      this._dummyCanvas = document.createElement('canvas');
+      const canvasWidth = 160;
+      const canvasHeight = 120;
+      this._dummyCanvas.width = canvasWidth;
+      this._dummyCanvas.height = canvasHeight;
+      const ctx = this._dummyCanvas.getContext('2d');
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      this._dummyCanvasTimerId = setInterval(() => {
+        if (this._dummyCanvas) {
+          const ctx = this._dummyCanvas.getContext('2d');
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, this._dummyCanvas.width, this._dummyCanvas.height);
+        }
+      }, 1000);
+      this._dummyCanvasStream = this._dummyCanvas.captureStream(1);
+    }
+    return this._dummyCanvasStream;
+  }
+
+  disposeDummyCanvasStream() {
+    if (this._dummyCanvasTimerId) {
+      clearInterval(this._dummyCanvasTimerId);
+      this._dummyCanvasTimerId = null;
+    }
+    this._dummyCanvasStream = null;
+    this._dummyCanvas = null;
   }
 
   async activate() {
@@ -640,6 +688,7 @@ exports.rtc = new class {
         for (const track of this._localTracks.stream.getTracks()) {
           this._localTracks.setTrack(track.kind, null);
         }
+        this.disposeDummyCanvasStream();
       } finally {
         this._trackLocks.video.unlock();
         this._trackLocks.audio.unlock();
@@ -673,8 +722,8 @@ exports.rtc = new class {
   }
 
   async playVideo($video) {
-    // play() will block indefinitely if there are no enabled tracks.
-    if (!$video[0].srcObject.getTracks().some((t) => t.enabled)) return;
+    // play() will block indefinitely if there are no enabled 'video' tracks.
+    if (!$video[0].srcObject.getVideoTracks().some((t) => t.enabled)) return;
     debug('playing video', $video[0]);
     const $videoContainer = $(`#container_${$video[0].id}`);
     const $playErrorBtn = $videoContainer.find('.play-error-btn');
