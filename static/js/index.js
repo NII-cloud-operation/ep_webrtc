@@ -653,6 +653,17 @@ exports.rtc = new class {
             this.getPeerConnection(userId).trackStream(remoteStream);
             this.updateSpotlightRids();
           });
+          this._soraClient.addEventListener('removeTrack', (e) => {
+            const remoteStream = e.detail.target;
+            if (remoteStream instanceof MediaStream) {
+              const userId = this._clientIdToUserId.get(remoteStream.id);
+              if (userId == null) return;
+              debug(`*find user id ${userId} of removed stream ${remoteStream.id}`);
+              const peer = this._peers.get(userId);
+              if (peer == null) return;
+              peer.trackStream(null);
+            }
+          });
           await this._soraClient.connect(this._localTracks.stream);
           debug(`*sora client connected, my clientid is ${this._soraClient.clientId}`);
           this.publish(null, true);
