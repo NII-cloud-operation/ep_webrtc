@@ -16,6 +16,7 @@
 'use strict';
 
 const SoraClient = require('./soraClient');
+const VoiceActivityDetector = require('./voiceActivityDetector');
 require('./adapter');
 const padcookie = require('ep_etherpad-lite/static/js/pad_cookie').padcookie;
 
@@ -207,6 +208,11 @@ exports.rtc = new class {
         this._soraClient.replaceLocalTrack(newTrack);
       }
 
+      // Update VAD when audio track changes.
+      if (this._vad && kind === 'audio') {
+        this._vad.setStream(this._localTracks.stream);
+      }
+
       // Update the audio/video buttons to reflect the new state.
       if (newTrack != null) return;
       switch (oldTrack.kind) {
@@ -229,6 +235,15 @@ exports.rtc = new class {
     this._dummyCanvasStream = null;
     this._dummyCanvas = null;
     this._dummyCanvasTimerId = null;
+    // VAD and speaking state
+    this._vad = null;
+    this._isSpeaking = false;
+    this._peerSpeakingState = new Map(); // userId -> boolean
+    // Conversation group state (received from server)
+    this._conversationGroups = []; // Array<Array<userId>>
+    this._conversationStates = {}; // userId -> 'conversation'|'standby'
+    this._monologue = null; // {userId, active} or null
+    this._heldUsers = []; // Array<userId>
   }
 
   get enableDebugLogging() { return enableDebugLogging; }
@@ -349,6 +364,14 @@ exports.rtc = new class {
           this.updateSpotlightRids();
         }
       }
+    } else if (this._activated && from === '_server' && data.conversationState) {
+      this._handleConversationStateUpdate(data.conversationState);
+    } else if (this._activated && from !== this.getUserId() && data.speaking !== undefined) {
+      this._peerSpeakingState.set(from, data.speaking);
+      if ((this._settings.conversationAudio || {}).debug) {
+        this._updateSpeakingIndicator(from, data.speaking);
+      }
+      this._updateAllPeerVolumes();
     } else if (this._activated && from !== this.getUserId() &&
           (this._peers.has(from) || data.hangup == null)) {
       this.getPeerConnection(from).receiveMessage(data);
@@ -357,6 +380,107 @@ exports.rtc = new class {
   }
 
   // END OF API HOOKS
+
+  _updateSpeakingIndicator(userId, isSpeaking) {
+    $(`#container_${getVideoId(userId)}`).toggleClass('speaking', isSpeaking);
+  }
+
+  _updateLevelMeter(rms) {
+    const $meter = $(`#container_${getVideoId(this.getUserId())} .vad-level-meter`);
+    if ($meter.length === 0) return;
+    const ca = this._settings.conversationAudio || {};
+    const threshold = (ca.vad || {}).speakingThreshold || 10;
+    // Clamp rms to 0-50 range for display.
+    const pct = Math.min(rms / 50 * 100, 100);
+    $meter.find('.vad-level-bar').css('width', `${pct}%`);
+    $meter.find('.vad-level-value').text(`RMS: ${rms.toFixed(1)}`);
+    $meter.find('.vad-level-bar').css(
+        'background-color', rms > threshold ? '#4CAF50' : '#ff9800'
+    );
+  }
+
+  _handleConversationStateUpdate(state) {
+    this._conversationGroups = state.groups || [];
+    this._conversationStates = state.states || {};
+    this._monologue = state.monologue || null;
+    this._heldUsers = state.held || [];
+    debug('conversation state update:', state);
+    this._updateAllPeerVolumes();
+    this._updateGroupIndicators();
+  }
+
+  _updateAllPeerVolumes() {
+    if (!(this._settings.conversationAudio || {}).enabled) return;
+    for (const userId of this._peers.keys()) {
+      this._updatePeerVolume(userId);
+    }
+  }
+
+  _findGroupForUser(userId) {
+    for (const group of this._conversationGroups) {
+      if (group.members.indexOf(userId) >= 0) return group;
+    }
+    return null;
+  }
+
+  _updatePeerVolume(userId) {
+    const ca = this._settings.conversationAudio || {};
+    if (!ca.enabled) return;
+    const $video = $(`#${getVideoId(userId)}`);
+    if ($video.length === 0 || $video[0].muted) return;
+    const suppressedLevel = ca.suppressedLevel != null ? ca.suppressedLevel : 0.2;
+
+    // Before receiving group state from server, use speaking state directly.
+    if (Object.keys(this._conversationStates).length === 0) {
+      const isSpeaking = this._peerSpeakingState.get(userId) || false;
+      $video[0].volume = isSpeaking ? 1.0 : suppressedLevel;
+      return;
+    }
+
+    const myState = this._conversationStates[this.getUserId()] || 'standby';
+
+    // Monologue: speaker is heard by everyone at standard level.
+    if (this._monologue && this._monologue.userId === userId) {
+      $video[0].volume = 1.0;
+      return;
+    }
+
+    let volume;
+    if (myState === 'standby') {
+      volume = suppressedLevel;
+    } else {
+      const myGroup = this._findGroupForUser(this.getUserId());
+      const peerGroup = this._findGroupForUser(userId);
+      if (myGroup && peerGroup && myGroup.id === peerGroup.id) {
+        volume = 1.0;
+      } else if (!peerGroup) {
+        volume = ca.unaffiliatedSpeakerLevel === 'standard' ? 1.0 : suppressedLevel;
+      } else {
+        volume = suppressedLevel;
+      }
+    }
+    $video[0].volume = volume;
+  }
+
+  _updateGroupIndicators() {
+    const myId = this.getUserId();
+    const myState = this._conversationStates[myId] || 'standby';
+    const allUserIds = [myId, ...this._peers.keys()];
+    for (const userId of allUserIds) {
+      const $container = $(`#container_${getVideoId(userId)}`);
+      if ($container.length === 0) continue;
+      const $indicator = $container.find('.state-indicator');
+      const isMonologue = this._monologue && this._monologue.userId === userId;
+      $indicator.toggleClass('monologue', !!isMonologue);
+      const group = this._findGroupForUser(userId);
+      // Group color on indicator; absent = gray (CSS default).
+      $indicator.attr('data-group-color', group && !isMonologue ? group.color : '');
+      // Disable TALK button when either party is in conversation.
+      const peerState = this._conversationStates[userId] || 'standby';
+      const canDesignate = myState !== 'conversation' && peerState !== 'conversation';
+      $container.find('.designate-btn').toggleClass('disabled', !canDesignate);
+    }
+  }
 
   updatePeerNameAndColor(userInfo) {
     if (!userInfo) return;
@@ -634,6 +758,24 @@ exports.rtc = new class {
             updateAudio: this._settings.audio.disabled !== 'hard',
             updateVideo: this._settings.video.disabled !== 'hard',
           });
+          // Initialize VAD for speaking detection (only when conversationAudio is enabled).
+          const ca = this._settings.conversationAudio || {};
+          if (ca.enabled) {
+            const vadSettings = ca.vad || {};
+            this._vad = new VoiceActivityDetector(vadSettings);
+            this._vad.addEventListener('speakingstatechanged', ({isSpeaking}) => {
+              this._isSpeaking = isSpeaking;
+              debug(`speaking state changed: ${isSpeaking}`);
+              this.sendMessage(null, {speaking: isSpeaking});
+              if (ca.debug) this._updateSpeakingIndicator(this.getUserId(), isSpeaking);
+            });
+            if (ca.debug) {
+              this._vad.addEventListener('level', ({rms}) => {
+                this._updateLevelMeter(rms);
+              });
+            }
+            this._vad.setStream(this._localTracks.stream);
+          }
           // initialize sora client
           this._soraClient = new SoraClient(
               this._settings.signalingUrls,
@@ -659,6 +801,7 @@ exports.rtc = new class {
         } finally {
           $checkbox.prop('disabled', false);
         }
+        this.sendMessage(null, {requestState: true});
         debug('activated');
       })();
     }
@@ -677,6 +820,16 @@ exports.rtc = new class {
     try {
       this._activated = null;
       padcookie.setPref('rtcEnabled', false);
+      if (this._vad) {
+        this._vad.destroy();
+        this._vad = null;
+      }
+      this._isSpeaking = false;
+      this._peerSpeakingState.clear();
+      this._conversationGroups = [];
+      this._conversationStates = {};
+      this._monologue = null;
+      this._heldUsers = [];
       this.hangupAll();
       this.setStream(this.getUserId(), null);
       const $rtcbox = $('#rtcbox');
@@ -711,6 +864,7 @@ exports.rtc = new class {
   async setStream(userId, stream) {
     let $video = $(`#${getVideoId(userId)}`);
     if (!stream) {
+      this._peerSpeakingState.delete(userId);
       $(`#container_${getVideoId(userId)}`).remove();
       return;
     }
@@ -718,6 +872,7 @@ exports.rtc = new class {
     if ($video.length === 0) $video = this.addInterface(userId, isLocal);
     // Avoid flicker by checking if .srcObject already equals stream.
     if ($video[0].srcObject !== stream) $video[0].srcObject = stream;
+    if (!isLocal) this._updatePeerVolume(userId);
     await this.playVideo($video);
   }
 
@@ -801,7 +956,13 @@ exports.rtc = new class {
         .css({width: '0', height: '0'})
         .append($name)
         .append($video)
+        .append(!(this._settings.conversationAudio || {}).enabled ? null
+        : $('<div>').addClass('state-indicator'))
         .append($interface)
+        .append(!isLocal || !(this._settings.conversationAudio || {}).debug ? null
+        : $('<div>').addClass('vad-level-meter')
+            .append($('<div>').addClass('vad-level-bar'))
+            .append($('<span>').addClass('vad-level-value')))
         // `min-width: min-content` and `min-height: min-content` don't work on all browsers. Even
         // if they did, the peer name display has `position: absolute` so that a really long name
         // doesn't cause $videoContainer to become overly wide. This function sets `min-width` and
@@ -822,6 +983,7 @@ exports.rtc = new class {
     if (isLocal) $videoContainer.prependTo($('#rtcbox'));
     else $videoContainer.appendTo($('#rtcbox'));
     this.updatePeerNameAndColor(this.getUserFromId(userId));
+    this._updateGroupIndicators();
 
     // For tests it is important to know when an asynchronous event handler has finishing handling
     // an event. This function wraps async event handler functions so that tests can wait for all
@@ -874,8 +1036,12 @@ exports.rtc = new class {
         const muted = audioInterface.enabled;
         _debug(`audio button clicked to ${muted ? 'dis' : 'en'}able audio`);
         audioInterface.enabled = !muted;
-        if (isLocal) await this.updateLocalTracks({updateAudio: true});
-        else $video[0].muted = muted;
+        if (isLocal) {
+          await this.updateLocalTracks({updateAudio: true});
+        } else {
+          $video[0].muted = muted;
+          if (!$video[0].muted) this._updatePeerVolume(userId);
+        }
         // Do not use `await` when calling unmuteAndPlayAll() because unmuting is best-effort
         // (success of this handler does not depend on the ability to unmute, and this handler's
         // idle/busy status should not be affected by unmuteAndPlayAll()). Call unmuteAndPlayAll()
@@ -884,6 +1050,57 @@ exports.rtc = new class {
         this.unmuteAndPlayAll();
       },
     });
+
+    // /////
+    // Designate button (remote panels only)
+    // /////
+
+    const caEnabled = (this._settings.conversationAudio || {}).enabled;
+
+    if (caEnabled && !isLocal) {
+      const $designateBtn = $('<span>')
+          .addClass('designate-btn')
+          .text('TALK')
+          .attr('title', 'Talk to this person')
+          .appendTo($videoContainer);
+      addAsyncEventHandlers($designateBtn, {
+        click: async () => {
+          const peerState = this._conversationStates[userId];
+          if (peerState === 'conversation') return;
+          const myState = this._conversationStates[this.getUserId()];
+          if (myState === 'conversation') return;
+          this.sendMessage(null, {designate: userId});
+        },
+      });
+    }
+
+    // /////
+    // Hold button (local panel only)
+    // /////
+
+    if (caEnabled && isLocal) {
+      const $holdBtn = $('<span>')
+          .addClass('hold-btn')
+          .text('HOLD')
+          .attr('title', 'Hold conversation state')
+          .appendTo($videoContainer);
+      this._selfViewButtons.hold = {
+        get enabled() { return $holdBtn.hasClass('held'); },
+        set enabled(val) {
+          $holdBtn
+              .toggleClass('held', val)
+              .attr('title', val ? 'Release hold' : 'Hold conversation state');
+        },
+      };
+      this._selfViewButtons.hold.enabled = false;
+      addAsyncEventHandlers($holdBtn, {
+        click: async () => {
+          const newHeld = !this._selfViewButtons.hold.enabled;
+          this._selfViewButtons.hold.enabled = newHeld;
+          this.sendMessage(null, {hold: newHeld});
+        },
+      });
+    }
 
     // /////
     // Video and Screen Sharing Buttons
