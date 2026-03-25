@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 const NUM_GROUP_COLORS = 10;
 
 class ConversationGroupManager {
@@ -11,7 +13,7 @@ class ConversationGroupManager {
     this._speakingStates = new Map();
     // userId -> 'conversation'|'standby'
     this._conversationStates = new Map();
-    // groupId -> Set<userId>
+    // groupId (UUID) -> {members: Set<userId>, color: number}
     this._groups = new Map();
     // userId -> groupId (absent = unaffiliated)
     this._userGroupId = new Map();
@@ -19,7 +21,6 @@ class ConversationGroupManager {
     this._excitationTimers = new Map();
     // {timerId, userId} or null (monologue timer: solo speaker -> standby if no response)
     this._monologue = null;
-    this._nextGroupId = 0;
     // Users whose conversation state is held (won't auto-transition to standby).
     this._heldUsers = new Set();
   }
@@ -94,12 +95,29 @@ class ConversationGroupManager {
     this._broadcastState();
   }
 
+  _allocateColor() {
+    const usedColors = new Set(
+        [...this._groups.values()].map((g) => g.color),
+    );
+    for (let i = 0; i < NUM_GROUP_COLORS; i++) {
+      if (!usedColors.has(i)) return i;
+    }
+    return 0;
+  }
+
+  _createGroup(memberIds) {
+    const groupId = crypto.randomUUID();
+    const color = this._allocateColor();
+    this._groups.set(groupId, {members: new Set(memberIds), color});
+    for (const uid of memberIds) {
+      this._userGroupId.set(uid, groupId);
+    }
+    return groupId;
+  }
+
   _formGroupFromMonologue(initiatorId, responderId) {
     this._cancelMonologue();
-    const groupId = this._nextGroupId++;
-    this._groups.set(groupId, new Set([initiatorId, responderId]));
-    this._userGroupId.set(initiatorId, groupId);
-    this._userGroupId.set(responderId, groupId);
+    this._createGroup([initiatorId, responderId]);
     this._conversationStates.set(initiatorId, 'conversation');
     this._conversationStates.set(responderId, 'conversation');
   }
@@ -107,7 +125,7 @@ class ConversationGroupManager {
   _addToGroup(userId, groupId) {
     const group = this._groups.get(groupId);
     if (!group) return;
-    group.add(userId);
+    group.members.add(userId);
     this._userGroupId.set(userId, groupId);
   }
 
@@ -116,8 +134,8 @@ class ConversationGroupManager {
     if (groupId == null) return;
     const group = this._groups.get(groupId);
     if (group) {
-      group.delete(userId);
-      if (group.size === 0) {
+      group.members.delete(userId);
+      if (group.members.size === 0) {
         this._groups.delete(groupId);
       }
     }
@@ -135,10 +153,7 @@ class ConversationGroupManager {
     this._conversationStates.set(speakerId, 'conversation');
     this._conversationStates.set(targetUserId, 'conversation');
 
-    const groupId = this._nextGroupId++;
-    this._groups.set(groupId, new Set([speakerId, targetUserId]));
-    this._userGroupId.set(speakerId, groupId);
-    this._userGroupId.set(targetUserId, groupId);
+    this._createGroup([speakerId, targetUserId]);
 
     // Start excitation timers for users not currently speaking (and not held).
     for (const uid of [speakerId, targetUserId]) {
@@ -222,11 +237,11 @@ class ConversationGroupManager {
 
   _broadcastState() {
     const groups = [];
-    for (const [groupId, members] of this._groups.entries()) {
+    for (const [groupId, group] of this._groups.entries()) {
       groups.push({
         id: groupId,
-        color: groupId % NUM_GROUP_COLORS,
-        members: Array.from(members),
+        color: group.color,
+        members: Array.from(group.members),
       });
     }
     const states = {};
