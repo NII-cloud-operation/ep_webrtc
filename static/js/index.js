@@ -1103,6 +1103,47 @@ exports.rtc = new class {
     }
 
     // /////
+    // Beep button (debug mode, local panel only) — injects dummy tone into VAD
+    // /////
+
+    const caDebug = (this._settings.conversationAudio || {}).debug;
+    if (caDebug && isLocal) {
+      const $beepBtn = $('<span>')
+          .addClass('beep-btn')
+          .text('BEEP')
+          .attr('title', 'Inject dummy audio into VAD')
+          .appendTo($videoContainer);
+      this._selfViewButtons.beep = {
+        get enabled() { return $beepBtn.hasClass('beeping'); },
+        set enabled(val) {
+          $beepBtn.toggleClass('beeping', val);
+        },
+      };
+      this._selfViewButtons.beep.enabled = false;
+      addAsyncEventHandlers($beepBtn, {
+        click: async () => {
+          const newBeeping = !this._selfViewButtons.beep.enabled;
+          this._selfViewButtons.beep.enabled = newBeeping;
+          if (!this._vad) return;
+          if (newBeeping) {
+            this._vad.startDummyTone();
+            const mixed = this._vad.mixedStream;
+            const mixedTrack = mixed && mixed.getAudioTracks()[0];
+            if (mixedTrack && this._soraClient) {
+              this._soraClient.replaceLocalTrack(mixedTrack);
+            }
+          } else {
+            this._vad.stopDummyTone();
+            const micTrack = this._localTracks.stream.getAudioTracks()[0];
+            if (micTrack && this._soraClient) {
+              this._soraClient.replaceLocalTrack(micTrack);
+            }
+          }
+        },
+      });
+    }
+
+    // /////
     // Video and Screen Sharing Buttons
     // /////
 

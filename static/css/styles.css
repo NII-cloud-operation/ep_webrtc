@@ -109,7 +109,8 @@
 #rtcbox .interface-btn.screenshare-btn.off:before { content: "\f109"; }
 
 #rtcbox .designate-btn,
-#rtcbox .hold-btn {
+#rtcbox .hold-btn,
+#rtcbox .beep-btn {
   position: absolute;
   top: 20px;
   right: 4px;
@@ -127,12 +128,14 @@
   transition: background-color .2s, color .2s;
 }
 #rtcbox .video-container:hover .designate-btn,
-#rtcbox .video-container:hover .hold-btn {
+#rtcbox .video-container:hover .hold-btn,
+#rtcbox .video-container:hover .beep-btn {
   --interface-text-alpha: 0.8;
   --interface-background-alpha: 0.7;
 }
 #rtcbox .video-container:hover .designate-btn:hover,
-#rtcbox .video-container:hover .hold-btn:hover {
+#rtcbox .video-container:hover .hold-btn:hover,
+#rtcbox .video-container:hover .beep-btn:hover {
   --interface-text-alpha: 1.0;
   --interface-background-alpha: 1.0;
 }
@@ -143,6 +146,14 @@
 #rtcbox .hold-btn.held {
   --interface-text-color-rgb: 255, 255, 255;
   --interface-background-color-rgb: 76, 175, 80;
+  --interface-background-alpha: 0.8;
+}
+#rtcbox .beep-btn {
+  top: 36px;
+}
+#rtcbox .beep-btn.beeping {
+  --interface-text-color-rgb: 255, 255, 255;
+  --interface-background-color-rgb: 233, 30, 99;
   --interface-background-alpha: 0.8;
 }
 

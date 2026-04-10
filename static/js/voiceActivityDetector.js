@@ -35,6 +35,8 @@ class VoiceActivityDetector extends EventTargetPolyfill {
     this._dataArray = new Uint8Array(this._analyser.fftSize);
     this._source = this._audioContext.createMediaStreamSource(stream);
     this._source.connect(this._analyser);
+    this._destination = this._audioContext.createMediaStreamDestination();
+    this._source.connect(this._destination);
     this._startAnalysis();
   }
 
@@ -51,6 +53,7 @@ class VoiceActivityDetector extends EventTargetPolyfill {
       this._analyser.disconnect();
       this._analyser = null;
     }
+    this._destination = null;
     this._dataArray = null;
   }
 
@@ -96,7 +99,37 @@ class VoiceActivityDetector extends EventTargetPolyfill {
     }
   }
 
+  get mixedStream() {
+    return this._destination ? this._destination.stream : null;
+  }
+
+  startDummyTone() {
+    if (!this._audioContext || !this._analyser || !this._destination) return;
+    this.stopDummyTone();
+    this._dummyOscillator = this._audioContext.createOscillator();
+    this._dummyGain = this._audioContext.createGain();
+    this._dummyOscillator.frequency.value = 440;
+    this._dummyGain.gain.value = 0.5;
+    this._dummyOscillator.connect(this._dummyGain);
+    this._dummyGain.connect(this._analyser);
+    this._dummyGain.connect(this._destination);
+    this._dummyOscillator.start();
+  }
+
+  stopDummyTone() {
+    if (this._dummyOscillator) {
+      this._dummyOscillator.stop();
+      this._dummyOscillator.disconnect();
+      this._dummyOscillator = null;
+    }
+    if (this._dummyGain) {
+      this._dummyGain.disconnect();
+      this._dummyGain = null;
+    }
+  }
+
   destroy() {
+    this.stopDummyTone();
     this._disconnect();
     if (this._audioContext && this._audioContext.state !== 'closed') {
       this._audioContext.close();
