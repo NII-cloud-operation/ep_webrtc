@@ -20,6 +20,7 @@ const sessioninfos = require('ep_etherpad-lite/node/handler/PadMessageHandler').
 const stats = require('ep_etherpad-lite/node/stats');
 const util = require('util');
 const {SignJWT} = require('jose');
+const ConversationGroupManager = require('./conversationGroupManager');
 
 let logger = {};
 for (const level of ['debug', 'info', 'warn', 'error']) {
@@ -58,9 +59,23 @@ const defaultSettings = {
   // The URL to change the spotlight RID.
   // {channelId} will be replaced with the channel ID.
   changeSpotlightRidUrl: null,
+  conversationAudio: {
+    enabled: false,
+    debug: false,
+    suppressedLevel: 0.2,
+    excitationTime: 15000,
+    monologueTime: 10000,
+    unaffiliatedSpeakerLevel: 'suppressed',
+    vad: {
+      speakingThreshold: 10,
+      silenceThreshold: 4,
+      silenceDelay: 1500,
+    },
+  },
 };
 let settings = null;
 let socketio;
+const padGroupManagers = new Map(); // padId -> ConversationGroupManager
 
 // Copied from:
 // https://github.com/ether/etherpad-lite/blob/f95b09e0b6752a0d226d58d8b246831164dc9533/src/node/handler/PadMessageHandler.js#L1411-L1420
@@ -78,6 +93,36 @@ const _getRoomSockets = (padID) => {
       .filter((socket) => socket);
 };
 
+const _broadcastToChannel = (padId, data) => {
+  const msg = {
+    type: 'COLLABROOM',
+    data: {
+      type: 'RTC_MESSAGE',
+      payload: {from: '_server', data},
+    },
+  };
+  for (const sock of _getRoomSockets(padId)) {
+    sock.emit('message', msg);
+  }
+};
+
+const _getOrCreateGroupManager = (padId) => {
+  let mgr = padGroupManagers.get(padId);
+  if (!mgr) {
+    const ca = settings.conversationAudio || {};
+    mgr = new ConversationGroupManager(
+        {
+          excitationTime: ca.excitationTime || 15000,
+          monologueTime: ca.monologueTime || 10000,
+        },
+        (data) => _broadcastToChannel(padId, data),
+        logger,
+    );
+    padGroupManagers.set(padId, mgr);
+  }
+  return mgr;
+};
+
 /**
  * Handles an RTC Message
  * @param socket The socket.io Socket object for the client that sent the message.
@@ -88,6 +133,35 @@ const handleRTCMessage = (socket, payload) => {
   // The handleMessage hook is executed asynchronously, so the user can disconnect between when the
   // message arrives at Etherpad and when this function is called.
   if (userId == null || padId == null) return;
+
+  // Conversation audio group management (only when enabled).
+  const caEnabled = (settings.conversationAudio || {}).enabled;
+  if (caEnabled) {
+    // Intercept speaking state messages for server-side group management.
+    if (payload.data && payload.data.speaking !== undefined) {
+      const mgr = _getOrCreateGroupManager(padId);
+      mgr.handleSpeakingStateChange(userId, payload.data.speaking);
+    }
+
+    // Intercept designation messages.
+    if (payload.data && payload.data.designate) {
+      const mgr = _getOrCreateGroupManager(padId);
+      mgr.handleDesignation(userId, payload.data.designate);
+    }
+
+    // Intercept hold messages.
+    if (payload.data && payload.data.hold !== undefined) {
+      const mgr = _getOrCreateGroupManager(padId);
+      mgr.setHold(userId, payload.data.hold);
+    }
+
+    // Send current state to newly joined client.
+    if (payload.data && payload.data.requestState) {
+      const mgr = padGroupManagers.get(padId);
+      if (mgr) mgr.broadcastState();
+    }
+  }
+
   const msg = {
     type: 'COLLABROOM',
     data: {
@@ -101,10 +175,10 @@ const handleRTCMessage = (socket, payload) => {
   if (payload.to == null) {
     socket.to(padId).emit('message', msg);
   } else {
-    for (const socket of _getRoomSockets(padId)) {
-      const session = sessioninfos[socket.id];
+    for (const sock of _getRoomSockets(padId)) {
+      const session = sessioninfos[sock.id];
       if (session && session.author === payload.to) {
-        socket.emit('message', msg);
+        sock.emit('message', msg);
         break;
       }
     }
@@ -142,6 +216,17 @@ exports.handleMessage = async (hookName, {message, socket}) => {
   if (message.type === 'STATS' && message.data.type === 'RTC_MESSAGE') {
     handleErrorStatMessage(message.data.statName);
     return [null];
+  }
+};
+
+exports.userLeave = async (hookName, {author, padId}) => {
+  if (author == null || padId == null) return;
+  const mgr = padGroupManagers.get(padId);
+  if (!mgr) return;
+  mgr.removeUser(author);
+  if (mgr.isEmpty) {
+    mgr.destroy();
+    padGroupManagers.delete(padId);
   }
 };
 
