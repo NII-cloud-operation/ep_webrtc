@@ -1452,8 +1452,8 @@ exports.rtc = new class {
     this.setStream(userId, null);
     const peer = this._peers.get(userId);
     if (peer == null) return;
-    peer.close();
     this._peers.delete(userId);
+    peer.close();
   }
 
   // 自分の情報(userId, sora client id)を公開する
@@ -1489,6 +1489,7 @@ exports.rtc = new class {
       });
       peer.addEventListener('streamgone', async ({stream}) => {
         _debug(`remote stream ${stream.id} removed`);
+        if (!this._peers.has(userId)) return;
         const $videoContainer = $(`#container_${getVideoId(userId)}`);
         $videoContainer.find('.disconnected-error-btn').css({display: ''});
         // The userLeave hook isn't called until it has been 8s since the peer left. Wait a bit
