@@ -5,6 +5,7 @@ const EventTargetPolyfill = require('./eventTargetPolyfill');
 class VoiceActivityDetector extends EventTargetPolyfill {
   constructor(options = {}) {
     super();
+    this._warn = options.warn || (() => {});
     this._speakingThreshold = options.speakingThreshold || 10;
     this._silenceThreshold = options.silenceThreshold || 4;
     this._silenceDelay = options.silenceDelay || 1500;
@@ -60,7 +61,10 @@ class VoiceActivityDetector extends EventTargetPolyfill {
   _startAnalysis() {
     const analyze = () => {
       this._rafId = requestAnimationFrame(analyze);
-      if (!this._analyser || !this._dataArray) return;
+      if (!this._analyser || !this._dataArray) {
+        this._warn('_startAnalysis: _analyser or _dataArray is null during analysis loop');
+        return;
+      }
       this._analyser.getByteTimeDomainData(this._dataArray);
       // Compute RMS amplitude (deviation from 128 center).
       let sumSquares = 0;
@@ -104,7 +108,10 @@ class VoiceActivityDetector extends EventTargetPolyfill {
   }
 
   startDummyTone() {
-    if (!this._audioContext || !this._analyser || !this._destination) return;
+    if (!this._audioContext || !this._analyser || !this._destination) {
+      throw new Error(
+          'startDummyTone: called before setStream() — audio nodes not initialized');
+    }
     this.stopDummyTone();
     this._dummyOscillator = this._audioContext.createOscillator();
     this._dummyGain = this._audioContext.createGain();
