@@ -22,6 +22,7 @@ const padcookie = require('ep_etherpad-lite/static/js/pad_cookie').padcookie;
 
 let enableDebugLogging = false;
 const debug = (...args) => { if (enableDebugLogging) console.debug('ep_webrtc:', ...args); };
+const warn = (...args) => console.warn('ep_webrtc:', ...args);
 
 const EventTargetPolyfill = require('./eventTargetPolyfill');
 
@@ -336,7 +337,11 @@ exports.rtc = new class {
   userJoinOrUpdate(hookName, {userInfo}) {
     const {userId} = userInfo;
     debug(`(peer ${userId}) join or update`);
-    if (!this._activated || !userId) return;
+    if (!this._activated) return;
+    if (!userId) {
+      warn('userJoinOrUpdate: userId is missing from userInfo');
+      return;
+    }
     this.updatePeerNameAndColor(userInfo);
   }
 
@@ -525,7 +530,7 @@ exports.rtc = new class {
           .then((res) => {
             if (!res.ok) {
               // retry after timeout * 2 milliseconds later
-              console.warn(
+              warn(
                   `Failed to change spotlight rid: ${res.status} ${res.statusText},` +
                   ` will retry after ${timeout * 2}ms`
               );
@@ -761,7 +766,7 @@ exports.rtc = new class {
           // Initialize VAD for speaking detection (only when conversationAudio is enabled).
           const ca = this._settings.conversationAudio || {};
           if (ca.enabled) {
-            const vadSettings = ca.vad || {};
+            const vadSettings = {...(ca.vad || {}), warn};
             this._vad = new VoiceActivityDetector(vadSettings);
             this._vad.addEventListener('speakingstatechanged', ({isSpeaking}) => {
               this._isSpeaking = isSpeaking;
@@ -876,7 +881,10 @@ exports.rtc = new class {
   }
 
   getUserFromId(userId) {
-    if (!this._pad || !this._pad.collabClient) return null;
+    if (!this._pad || !this._pad.collabClient) {
+      warn('getUserFromId: _pad or collabClient is not initialized');
+      return null;
+    }
     const result = this._pad.collabClient
         .getConnectedUsers()
         .filter((user) => user.userId === userId);
@@ -1149,7 +1157,10 @@ exports.rtc = new class {
         click: async () => {
           const newBeeping = !this._selfViewButtons.beep.enabled;
           this._selfViewButtons.beep.enabled = newBeeping;
-          if (!this._vad) return;
+          if (!this._vad) {
+            warn('beep click: _vad is not initialized');
+            return;
+          }
           if (newBeeping) {
             this._vad.startDummyTone();
             const mixed = this._vad.mixedStream;
