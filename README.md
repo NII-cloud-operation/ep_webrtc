@@ -29,19 +29,30 @@ or everyone has fast Internet connections) but not for large groups.
 
 ### Plugin On/Off
 
-In the settings menu there is a toggle to turn the plugin on and off for the
-user. When toggled, its state is saved in a cookie and applied when any pad is
-visited. The value can also be changed by adding `av=true` or `av=false` to the
-URL query parameters.
+The plugin requires a non-empty `ep_webrtc` object in the server's
+`settings.json`. If it is omitted or empty (`{}`), the plugin is inactive:
+its settings controls and stylesheet are omitted, client initialization is
+skipped, RTC messages are not relayed, and its HTTP endpoints return 404.
+URL parameters and saved user preferences cannot activate it in this state.
+Sites that previously used the plugin without any configuration must now add
+an explicit configuration to retain that behavior.
 
-The default value for this setting can be controlled in the server's
-`settings.json` file (it defaults to `true`):
+When configured, the settings menu contains a toggle to turn the plugin on
+and off for the user. Its state is saved in a cookie and applied when any pad
+is visited. The value can also be changed by adding `av=true` or `av=false`
+to the URL query parameters.
+
+The `enabled` setting controls the default value of this user preference
+(it defaults to `true` within a non-empty configuration):
 
 ```json
   "ep_webrtc": {
     "enabled": true
   }
 ```
+
+Setting `enabled` to `false` keeps the controls available but starts chat off
+by default. URL parameters and saved user preferences override this default.
 
 ### Video/Audio On/Off
 

@@ -74,6 +74,8 @@ const defaultSettings = {
   },
 };
 let settings = null;
+// Separate site availability from the user preference in settings.enabled.
+let configured = false;
 let socketio;
 const padGroupManagers = new Map(); // padId -> ConversationGroupManager
 
@@ -205,16 +207,17 @@ const handleErrorStatMessage = (statName) => {
 
 exports.clientVars = async (hookName, context) => ({ep_webrtc: {
   ...settings,
+  configured,
   apiKey: '*****', // api key must be secret.
 }});
 
 exports.handleMessage = async (hookName, {message, socket}) => {
   if (message.type === 'COLLABROOM' && message.data.type === 'RTC_MESSAGE') {
-    handleRTCMessage(socket, message.data.payload);
+    if (configured) handleRTCMessage(socket, message.data.payload);
     return [null];
   }
   if (message.type === 'STATS' && message.data.type === 'RTC_MESSAGE') {
-    handleErrorStatMessage(message.data.statName);
+    if (configured) handleErrorStatMessage(message.data.statName);
     return [null];
   }
 };
@@ -249,6 +252,7 @@ exports.init_ep_webrtc = async (hookName, {logger: l}) => {
 exports.setSocketIO = (hookName, {io}) => { socketio = io; };
 
 exports.eejsBlock_mySettings = (hookName, context) => {
+  if (!configured) return;
   context.content += eejs.require('./templates/settings.ejs', {
     audio_hard_disabled: settings.audio.disabled === 'hard',
     video_hard_disabled: settings.video.disabled === 'hard',
@@ -256,10 +260,12 @@ exports.eejsBlock_mySettings = (hookName, context) => {
 };
 
 exports.eejsBlock_styles = (hookName, context) => {
+  if (!configured) return;
   context.content += eejs.require('./templates/styles.html', {}, module);
 };
 
 exports.loadSettings = async (hookName, {settings: {ep_webrtc: s = {}}}) => {
+  configured = Object.keys(s).length > 0;
   settings = _.mergeWith({}, defaultSettings, s, (objV, srcV, key, obj, src) => {
     if (Array.isArray(srcV)) return _.cloneDeep(srcV); // Don't merge arrays, replace them.
     if (src === s.video && key === 'constraints') return _.cloneDeep(srcV);
@@ -402,6 +408,7 @@ exports.expressCreateServer = (hookName, args, cb) => {
   logger.info('expressCreateServer');
   const {app} = args;
   app.post('/ep_webrtc/create-access-token', (req, res) => {
+    if (!configured) return res.sendStatus(404);
     console.log(
         '[ep_webrtc]',
         'create-access-token',
@@ -435,6 +442,7 @@ exports.expressCreateServer = (hookName, args, cb) => {
     return fetchMeetingDevAccessToken(apiKey, channelId, userDisplayName, res);
   });
   app.post('/ep_webrtc/:channelId/change-spotlight-rid', (req, res) => {
+    if (!configured) return res.sendStatus(404);
     // eslint-disable-next-line camelcase
     const {item_list, recv_connection_id} = req.body;
     // eslint-disable-next-line camelcase

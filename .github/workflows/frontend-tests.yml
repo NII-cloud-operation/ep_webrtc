@@ -74,7 +74,13 @@ jobs:
         name: Install Etherpad core dependencies
         run: bin/installDeps.sh
       - name: Create settings.json
-        run: cp ./src/tests/settings.json settings.json
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const settings = JSON.parse(fs.readFileSync('./src/tests/settings.json', 'utf8'));
+          settings.ep_webrtc = {enabled: true};
+          fs.writeFileSync('settings.json', JSON.stringify(settings));
+          NODE
       - name: Run the frontend tests
         shell: bash
         run: |

@@ -253,6 +253,8 @@ exports.rtc = new class {
   // API HOOKS
 
   async postAceInit(hookName, {pad}) {
+    this._settings = clientVars.ep_webrtc;
+    if (this._settings && this._settings.configured === false) return;
     const outerWin = document.querySelector('iframe[name="ace_outer"]').contentWindow;
     const innerWin = outerWin.document.querySelector('iframe[name="ace_inner"]').contentWindow;
     this._windows = [window, outerWin, innerWin];
@@ -264,7 +266,6 @@ exports.rtc = new class {
       if (this._soraClient) this._soraClient.disconnect();
       for (const userId of this._peers.keys()) this.getPeerConnection(userId).trackStream(null);
     });
-    this._settings = clientVars.ep_webrtc;
     if (this._settings == null || this._settings.configError) {
       $.gritter.add({
         title: 'Error',
@@ -346,6 +347,7 @@ exports.rtc = new class {
   }
 
   userLeave(hookName, {userInfo: {userId}}) {
+    if (this._settings && this._settings.configured === false) return;
     debug(`(peer ${userId}) leave`);
     this.hangup(userId);
   }
@@ -748,6 +750,7 @@ exports.rtc = new class {
   }
 
   async activate() {
+    if (this._settings && this._settings.configured === false) return;
     if (!this._activated) {
       this._activated = (async () => {
         const $checkbox = $('#options-enablertc');

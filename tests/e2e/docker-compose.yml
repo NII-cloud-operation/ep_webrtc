@@ -1,0 +1,25 @@
+x-etherpad: &etherpad
+  image: ep-webrtc-e2e:local
+
+services:
+  omitted:
+    <<: *etherpad
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile
+    ports:
+      - '127.0.0.1:19001:9001'
+    volumes:
+      - ./settings/omitted.json:/opt/etherpad-lite/settings.json:ro
+  empty:
+    <<: *etherpad
+    ports:
+      - '127.0.0.1:19002:9001'
+    volumes:
+      - ./settings/empty.json:/opt/etherpad-lite/settings.json:ro
+  configured:
+    <<: *etherpad
+    ports:
+      - '127.0.0.1:19003:9001'
+    volumes:
+      - ./settings/configured.json:/opt/etherpad-lite/settings.json:ro

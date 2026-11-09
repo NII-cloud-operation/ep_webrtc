@@ -3,3 +3,5 @@
 node_modules/
 node_modules
 .idea
+/tests/e2e/artifacts/
+__pycache__/
