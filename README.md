@@ -25,6 +25,8 @@ or everyone has fast Internet connections) but not for large groups.
   git clone https://github.com/ether/ep_webrtc
   ```
 
+See [Releasing ep_webrtc](RELEASE.md) for version tags and source releases.
+
 ## Settings
 
 ### Plugin On/Off
