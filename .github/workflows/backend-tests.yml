@@ -1,92 +1,58 @@
 name: Backend Tests
 
-# any branch is useful for testing before a PR is submitted
 on:
   workflow_call:
 
 jobs:
   withplugins:
-    # run on pushes to any branch
-    # run on PRs from external forks
-    if: |
-      (github.event_name != 'pull_request')
-      || (github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id)
     name: with Plugins
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      -
-        name: Install libreoffice
-        uses: awalsh128/cache-apt-pkgs-action@v1.5.0
-        with:
-          packages: libreoffice libreoffice-pdfimport
-          version: 1.0
-      -
-        name: Install etherpad core
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v7
         with:
           repository: ether/etherpad-lite
           path: etherpad-lite
-      - uses: pnpm/action-setup@v4
-        name: Install pnpm
+      - uses: actions/setup-node@v7
         with:
-          version: 8
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: ./etherpad-lite/package.json
           run_install: false
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-      - uses: actions/cache@v4
-        name: Setup pnpm cache
+      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-      -
-        name: Checkout plugin repository
-        uses: actions/checkout@v3
+          packages: libreoffice
+          version: 1.0
+      - uses: actions/checkout@v7
         with:
           path: plugin
-      -
-        name: Determine plugin name
-        id: plugin_name
-        working-directory: ./plugin
-        run: |
-          npx -c 'printf %s\\n "::set-output name=plugin_name::${npm_package_name}"'
-      -
-        name: Link plugin directory
-        working-directory: ./plugin
-        run: |
-          pnpm link --global
-      - name: Remove tests
-        working-directory: ./etherpad-lite
-        run: rm -rf ./src/tests/backend/specs
-      -
-        name: Install Etherpad core dependencies
-        working-directory: ./etherpad-lite
+      - name: Install Etherpad dependencies
+        working-directory: etherpad-lite
         run: bin/installDeps.sh
-      - name: Link plugin to etherpad-lite
-        working-directory: ./etherpad-lite
+      - name: Build admin UI
+        working-directory: etherpad-lite/admin
+        run: pnpm build
+      - name: Install plugin
+        working-directory: etherpad-lite
+        run: pnpm run plugins i --path ../../plugin
+      - name: Create test settings
+        working-directory: etherpad-lite
         run: |
-          pnpm link --global $PLUGIN_NAME
-          pnpm run install-plugins --path  ../../plugin
-        env:
-          PLUGIN_NAME: ${{ steps.plugin_name.outputs.plugin_name }}
-      - name: Link ep_etherpad-lite
-        working-directory: ./etherpad-lite/src
-        run: |
-          pnpm link --global
-      - name: Link etherpad to plugin
-        working-directory: ./plugin
-        run: |
-          pnpm link --global ep_etherpad-lite
-      -
-        name: Run the backend tests
-        working-directory: ./etherpad-lite
-        run: |
-          res=$(find .. -path "./node_modules/ep_*/static/tests/backend/specs/**" | wc -l)
-          if [ $res -eq 0 ]; then
-          echo "No backend tests found"
-          else
-          pnpm run test
-          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const settings = JSON.parse(fs.readFileSync('src/tests/settings.json', 'utf8'));
+          settings.ep_webrtc = {enabled: false};
+          settings.soffice = '/usr/bin/soffice';
+          fs.writeFileSync('settings.json', JSON.stringify(settings));
+          NODE
+      - name: Run backend tests with the plugin installed
+        shell: bash
+        working-directory: etherpad-lite
+        run: pnpm test 2>&1 | tee backend-tests.log
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-test-results
+          path: etherpad-lite/backend-tests.log
