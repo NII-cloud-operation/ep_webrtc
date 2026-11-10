@@ -113,9 +113,14 @@ Documentation should be kept up-to-date. This means, whenever you add a new API 
 You can build the docs e.g. produce html, using `make docs`. At some point in the future we will provide an online documentation. The current documentation in the github wiki should always reflect the state of `master` (!), since there are no docs in master, yet.
 
 ## Testing
-Front-end tests are found in the `tests/frontend/` folder in the repository. Run them by pointing your browser to `<yourdomainhere>/tests/frontend`.
+Front-end tests are in `static/tests/frontend-new/specs/` and are discovered by
+Etherpad's Playwright runner when this plugin is installed. Start Etherpad with
+an explicit `ep_webrtc` configuration, then run `pnpm run test-ui --project=chromium`
+from Etherpad's `src` directory. The local-control suites use synthetic media and
+stub SFU transport; they do not verify a real media connection.
 
-Back-end tests can be run from the `src` directory, via `npm test`.
+Run `pnpm test` from the Etherpad root to run backend compatibility tests with the
+plugin installed. The CI workflows define the required dependencies and test settings.
 
 ## Things you can help with
 Etherpad is much more than software.  So if you aren't a developer then worry not, there is still a LOT you can do!  A big part of what we do is community engagement.  You can help in the following ways
