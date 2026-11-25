@@ -15,6 +15,7 @@
  */
 'use strict';
 
+const {createBackgroundBlur} = require('./backgroundBlur');
 const SoraClient = require('./soraClient');
 const VoiceActivityDetector = require('./voiceActivityDetector');
 const ScreenWakeLock = require('./screenWakeLock');
@@ -191,6 +192,10 @@ exports.rtc = new class {
     this._soraClient = null;
     this._localTracks = new LocalTracks();
     this._localTracks.addEventListener('trackchanged', ({oldTrack, newTrack}) => {
+      if (this._blur && oldTrack === this._blur.track) {
+        this._blur.close();
+        this._blur = null;
+      }
       // Normally the self-view UI only needs to be updated if the user clicks on something, but it
       // also needs to be updated if the browser decides to end the local stream for whatever
       // reason. (Safari v14.1 on macOS v11.3.1 (Big Sur) seems to have a bug that causes it to
@@ -350,6 +355,9 @@ exports.rtc = new class {
         await this.activate();
       });
     }
+    $('#options-backgroundblur').on('change', async () => {
+      if (this._activated) await this.updateLocalTracks({updateVideo: true});
+    });
     $('#options-enablertc').on('change', async (event) => {
       if (event.currentTarget.checked) {
         await this.activate();
@@ -643,6 +651,30 @@ exports.rtc = new class {
     logErrorToServer(err);
   }
 
+  async setCameraTrack(camera) {
+    if (!$('#options-backgroundblur').prop('checked')) {
+      this._localTracks.setTrack('video', camera);
+      return;
+    }
+    const fail = (err) => {
+      this._localTracks.setTrack('video', null);
+      if (err) {
+        $.gritter.add({title: html10n.get('ep_webrtc_blur_failed'), text: '', sticky: true});
+        logErrorToServer(err);
+      }
+    };
+    let blur;
+    try {
+      blur = await createBackgroundBlur(camera, fail);
+    } catch (err) {
+      camera.stop();
+      fail(err);
+      return;
+    }
+    this._localTracks.setTrack('video', blur.track);
+    this._blur = blur;
+  }
+
   // Performs the following steps for the local audio and/or video tracks:
   //   1. Read the state of the UI: Is the button in the enabled or disabled state?
   //   2. Try to make the track match the state of the UI.
@@ -706,9 +738,22 @@ exports.rtc = new class {
                 // dummy video stream is no longer needed
                 this.disposeDummyCanvasStream();
               }
-              this._localTracks.setTrack(track.kind, track);
+              if (track.kind === 'video' && !this._localTracks.videoIsScreenshare) {
+                await this.setCameraTrack(track);
+              } else {
+                this._localTracks.setTrack(track.kind, track);
+              }
             }
           }));
+      const [current] = this._localTracks.getTracks('video');
+      if (updateVideo && current && !this._localTracks.videoIsScreenshare &&
+          !this._localTracks.videoIsDummy && this._selfViewButtons.video.enabled &&
+          Boolean(this._blur) !== $('#options-backgroundblur').is(':checked')) {
+        const camera = (this._blur ? this._blur.camera : current).clone();
+        camera.enabled = true;
+        current.enabled = false;
+        await this.setCameraTrack(camera);
+      }
       if (updateAudio) {
         for (const track of this._localTracks.stream.getAudioTracks()) {
           // Re-check the state of the button because the user might have clicked it while
@@ -726,6 +771,7 @@ exports.rtc = new class {
           track.enabled = this._localTracks.videoIsScreenshare
             ? this._selfViewButtons.screenshare.enabled : this._selfViewButtons.video.enabled;
         }
+        if (this._blur) this._blur.camera.enabled = this._blur.track.enabled;
         const hasVideo = this._localTracks.stream.getVideoTracks().some(
             (t) => t.enabled && t.readyState === 'live');
         this._selfViewButtons.video.enabled = hasVideo && !this._localTracks.videoIsScreenshare;

@@ -13,6 +13,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.3",
     "abort-controller": "^3.0.0",
     "jose": "5.10.0",
     "lodash": "^4.17.21",

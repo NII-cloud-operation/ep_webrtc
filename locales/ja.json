@@ -1,4 +1,6 @@
 {
+    "ep_webrtc_backgroundblur": "カメラの背景をぼかす",
+    "ep_webrtc_blur_failed": "背景をぼかせなかったため、カメラをオフにしました。",
 	"@metadata": {
 		"authors": [
 			"MathXplore"
