@@ -46,6 +46,10 @@ jobs:
           settings.soffice = '/usr/bin/soffice';
           fs.writeFileSync('settings.json', JSON.stringify(settings));
           NODE
+      - name: Run plugin backend tests
+        working-directory: etherpad-lite/src
+        shell: bash
+        run: pnpm exec mocha --fail-zero --recursive plugin_packages/ep_webrtc/static/tests/backend/specs 2>&1 | tee ../plugin-backend-tests.log
       - name: Run backend tests with the plugin installed
         shell: bash
         working-directory: etherpad-lite
@@ -55,4 +59,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: backend-test-results
-          path: etherpad-lite/backend-tests.log
+          path: |
+            etherpad-lite/backend-tests.log
+            etherpad-lite/plugin-backend-tests.log
