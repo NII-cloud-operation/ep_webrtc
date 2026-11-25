@@ -1,4 +1,6 @@
 {
+    "ep_webrtc_backgroundblur": "Blur camera background",
+    "ep_webrtc_blur_failed": "Background blur failed. Your camera is off.",
     "ep_webrtc_settings_enablertc": "Enable Audio/Video Chat",
 
     "ep_webrtc_error_ssl": "TLS (https) is required to use WebRTC.",

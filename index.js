@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+const path = require('path');
 const _ = require('lodash');
 const eejs = require('ep_etherpad-lite/node/eejs/');
 const sessioninfos = require('ep_etherpad-lite/node/handler/PadMessageHandler').sessioninfos;
@@ -407,6 +408,23 @@ const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => 
 exports.expressCreateServer = (hookName, args, cb) => {
   logger.info('expressCreateServer');
   const {app} = args;
+  const vision = path.dirname(require.resolve('@mediapipe/tasks-vision/vision_bundle.js'));
+  const blurAssets = new Map([
+    ['vision_bundle.mjs', path.join(vision, 'vision_bundle.mjs')],
+    ['selfie_segmenter_landscape.tflite',
+      path.join(__dirname, 'static/models/selfie_segmenter_landscape.tflite')],
+  ]);
+  for (const name of ['vision_wasm_internal', 'vision_wasm_module_internal']) {
+    for (const ext of ['js', 'wasm']) {
+      const file = `${name}.${ext}`;
+      blurAssets.set(file, path.join(vision, 'wasm', file));
+    }
+  }
+  app.get('/ep_webrtc/blur/:file', (req, res) => {
+    const file = blurAssets.get(req.params.file);
+    if (!configured || !file) return res.sendStatus(404);
+    res.sendFile(path.basename(file), {root: path.dirname(file)});
+  });
   app.post('/ep_webrtc/create-access-token', (req, res) => {
     if (!configured) return res.sendStatus(404);
     console.log(

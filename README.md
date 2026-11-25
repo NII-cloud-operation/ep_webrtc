@@ -257,6 +257,16 @@ value acceptable to client browsers. It has the following default value:
 For a full list of available constraints, see [the
 standard](https://www.w3.org/TR/2022/CRD-mediacapture-streams-20220307/#constrainable-properties).
 
+### Camera background blur
+
+Select **Blur camera background** in pad settings before or during a call.
+Your preview and the video other participants receive show the same effect.
+Screen sharing uses the original display capture. The setting starts off on each page load.
+
+Person segmentation runs in the sending browser. On first use the browser loads
+MediaPipe and the [SelfieSegmenter landscape model](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/1/selfie_segmenter_landscape.tflite)
+from the Etherpad site.
+
 ### Video Sizes
 
 The camera's record resolution can be configured by setting `video.constraints`

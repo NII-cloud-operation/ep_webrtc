@@ -1,4 +1,6 @@
 {
+    "ep_webrtc_backgroundblur": "カメラの背景をぼかす",
+    "ep_webrtc_blur_failed": "背景をぼかせなかったため、カメラをオフにしました。",
 	"@metadata": {
 		"authors": [
 			"MathXplore"
@@ -14,5 +16,8 @@
 	"ep_webrtc_wake_prompt": "操作していない間も、画面が消えないようにします。",
 	"ep_webrtc_wake_start": "OK",
 	"ep_webrtc_wake_retry": "画面の自動消灯を防ぐことができませんでした。\nもう一度「OK」を押してください。",
-	"ep_webrtc_wake_unsupported": "このブラウザーでは、画面の自動消灯を防げません。共同編集や会話はそのまま利用できます。"
+	"ep_webrtc_wake_unsupported": "このブラウザーでは、画面の自動消灯を防げません。共同編集や会話はそのまま利用できます。",
+	"ep_webrtc_settings_enablertc": "音声・ビデオチャット",
+	"ep_webrtc_settings_audioenabledonstart": "通話開始時にマイクをオン",
+	"ep_webrtc_settings_videoenabledonstart": "通話開始時にカメラをオン"
 }
