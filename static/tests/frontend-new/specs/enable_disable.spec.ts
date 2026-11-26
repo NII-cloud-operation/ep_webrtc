@@ -7,7 +7,8 @@ test('the pad call starts for current and later visitors and stops for everyone'
   try {
     await installTestMedia(guest);
     await guest.goto(page.url());
-    await guest.getByRole('button', {name: "I've saved it", exact: true}).click();
+    await guest.locator('#rtcbox').waitFor({state: 'attached'});
+    await guest.waitForFunction(() => (window as any).$('#rtcbox').data('initialized'));
     for (const visitor of [page, guest]) await expect(visitor.locator('#rtcbox video')).toHaveCount(0);
 
     await page.locator('[data-key="settings"] button').click();
