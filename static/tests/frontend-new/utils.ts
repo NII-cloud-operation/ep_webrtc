@@ -5,63 +5,65 @@ export {expect};
 export const test = base.extend({
   launchOptions: {args: ['--autoplay-policy=no-user-gesture-required']},
   page: async ({page}, use) => {
-    await page.addInitScript(() => {
-      const win = window as any;
-      let rtc;
-      Object.defineProperty(window, 'ep_webrtc', {
-        configurable: true,
-        get: () => rtc,
-        set(value) {
-          rtc = value;
-          let soraClient = null;
-          Object.defineProperty(rtc, '_soraClient', {
-            get: () => soraClient,
-            set(client) {
-              // Local-control tests do not establish SFU connections.
-              if (client !== null) {
-                client.connect = async () => {};
-                client.disconnect = async () => {};
-                client.replaceLocalTrack = async () => {};
-              }
-              soraClient = client;
-            },
-          });
-        },
-      });
-      const makeStream = async ({audio, video}) => {
-        const tracks = [];
-        if (audio) {
-          const audioContext = new AudioContext();
-          tracks.push(...audioContext.createMediaStreamDestination().stream.getAudioTracks());
-        }
-        if (video) {
-          const {width: {ideal: width = 160} = {}, height: {ideal: height = 120} = {}} = video;
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const context = canvas.getContext('2d');
-          setInterval(() => {
-            context.fillStyle = `rgb(${Date.now() % 255}, 0, 0)`;
-            context.fillRect(0, 0, width, height);
-          }, 50);
-          tracks.push(...canvas.captureStream().getVideoTracks());
-        }
-        return new MediaStream(tracks);
-      };
-      win.webrtcTest = {makeStream, audioTrack: null, videoTrack: null,
-        microphoneTracks: [], cameraTracks: []};
-      navigator.mediaDevices.getUserMedia = async (constraints) => {
-        if (!constraints.audio && !constraints.video) throw new TypeError('audio or video required');
-        const stream = await makeStream(constraints);
-        [win.webrtcTest.audioTrack] = stream.getAudioTracks();
-        [win.webrtcTest.videoTrack] = stream.getVideoTracks();
-        win.webrtcTest.microphoneTracks.push(...stream.getAudioTracks());
-        win.webrtcTest.cameraTracks.push(...stream.getVideoTracks());
-        return stream;
-      };
-    });
+    await installTestMedia(page);
     await use(page);
   },
+});
+
+export const installTestMedia = (page: Page) => page.addInitScript(() => {
+  const win = window as any;
+  let rtc;
+  Object.defineProperty(window, 'ep_webrtc', {
+    configurable: true,
+    get: () => rtc,
+    set(value) {
+      rtc = value;
+      let soraClient = null;
+      Object.defineProperty(rtc, '_soraClient', {
+        get: () => soraClient,
+        set(client) {
+          // Local-control tests do not establish SFU connections.
+          if (client !== null) {
+            client.connect = async () => {};
+            client.disconnect = async () => {};
+            client.replaceLocalTrack = async () => {};
+          }
+          soraClient = client;
+        },
+      });
+    },
+  });
+  const makeStream = async ({audio, video}) => {
+    const tracks = [];
+    if (audio) {
+      const audioContext = new AudioContext();
+      tracks.push(...audioContext.createMediaStreamDestination().stream.getAudioTracks());
+    }
+    if (video) {
+      const {width: {ideal: width = 160} = {}, height: {ideal: height = 120} = {}} = video;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      setInterval(() => {
+        context.fillStyle = `rgb(${Date.now() % 255}, 0, 0)`;
+        context.fillRect(0, 0, width, height);
+      }, 50);
+      tracks.push(...canvas.captureStream().getVideoTracks());
+    }
+    return new MediaStream(tracks);
+  };
+  win.webrtcTest = {makeStream, audioTrack: null, videoTrack: null,
+    microphoneTracks: [], cameraTracks: []};
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    if (!constraints.audio && !constraints.video) throw new TypeError('audio or video required');
+    const stream = await makeStream(constraints);
+    [win.webrtcTest.audioTrack] = stream.getAudioTracks();
+    [win.webrtcTest.videoTrack] = stream.getVideoTracks();
+    win.webrtcTest.microphoneTracks.push(...stream.getAudioTracks());
+    win.webrtcTest.cameraTracks.push(...stream.getVideoTracks());
+    return stream;
+  };
 });
 
 export function* cartesian(...arrays: unknown[][]): Generator<any[]> {
@@ -87,8 +89,8 @@ export const activate = async (page: Page) => {
   await page.locator('#padsettings-enablertc').evaluate((el: HTMLInputElement) => {
     if (!el.checked) el.click();
   });
-  await page.locator('#rtc-call').click();
-  await expect(page.getByRole('button', {name: 'Leave call'})).toBeEnabled();
+  await page.waitForFunction(() => !!(window as any).ep_webrtc._activated);
+  await page.evaluate(() => (window as any).ep_webrtc._activated);
 };
 
 export const tracks = (page: Page) => page.evaluate(() => {

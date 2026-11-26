@@ -237,6 +237,7 @@ exports.rtc = new class {
     // Populated with convenience methods once the self-view interface is created.
     this._selfViewButtons = {};
     // When grabbing both locks the audio lock must be grabbed first to avoid deadlock.
+    this._callSettingsLock = new Mutex();
     this._trackLocks = {audio: new Mutex(), video: new Mutex()};
     // for dummy canvas stream
     this._dummyCanvasStream = null;
@@ -298,10 +299,6 @@ exports.rtc = new class {
 
     $('#padsettings-enablertc').on('change', ({currentTarget}) => {
       pad.changePadOption('ep_webrtc', {enabled: currentTarget.checked});
-    });
-    $('#rtc-call').on('click', async () => {
-      if (this._activated) await this.deactivate();
-      else await this.activate();
     });
     if (this._settings.audio.disabled !== 'hard') {
       this.settingToCheckbox({
@@ -367,7 +364,7 @@ exports.rtc = new class {
     });
     $(window).on('beforeunload', () => { this.hangupAll(); });
     $(window).on('unload', () => { this.hangupAll(); });
-    this.updateCallControls();
+    await this.applyCallSetting();
     $rtcbox.data('initialized', true); // Help tests determine when initialization is done.
   }
 
@@ -377,18 +374,22 @@ exports.rtc = new class {
       ? option?.enabled : undefined) ?? this._settings.enabled;
   }
 
-  updateCallControls() {
-    const allowed = this.callsAllowed();
-    $('#padsettings-enablertc').prop('checked', allowed);
-    $('#rtc-call-control').prop('hidden', !allowed);
-    const key = this._activated ? 'ep_webrtc_leave_call' : 'ep_webrtc_join_call';
-    $('#rtc-call').attr('data-l10n-id', key).text(html10n.get(key));
+  async applyCallSetting() {
+    await this._callSettingsLock.lock();
+    try {
+      const enabled = this.callsAllowed();
+      $('#padsettings-enablertc').prop('checked', enabled);
+      if (enabled) await this.activate();
+      else await this.deactivate();
+    } finally {
+      this._callSettingsLock.unlock();
+    }
   }
 
   handleClientMessage_CLIENT_MESSAGE(hookName, {payload}) {
-    if (!this._pad || payload?.type !== 'padoptions' || !payload.options?.ep_webrtc) return;
-    this.updateCallControls();
-    if (!this.callsAllowed() && this._activated) void this.deactivate();
+    if (this._pad && payload?.type === 'padoptions' && 'ep_webrtc' in payload.options) {
+      void this.applyCallSetting();
+    }
   }
 
   userJoinOrUpdate(hookName, {userInfo}) {
@@ -847,9 +848,7 @@ exports.rtc = new class {
     if (!this._pad || !this.callsAllowed()) return;
     if (!this._activated) {
       this._activated = (async () => {
-        const $button = $('#rtc-call');
         debug('activating');
-        $button.prop('disabled', true);
         try {
           $('#rtcbox').css('display', 'flex');
           this.hangupAll();
@@ -924,9 +923,6 @@ exports.rtc = new class {
         } catch (err) {
           await this.deactivate(false);
           throw err;
-        } finally {
-          $button.prop('disabled', false);
-          this.updateCallControls();
         }
         this.sendMessage(null, {requestState: true});
         debug('activated');
@@ -936,44 +932,37 @@ exports.rtc = new class {
   }
 
   async deactivate(awaitActivated = true) {
-    const $button = $('#rtc-call');
     if (awaitActivated) await this._activated;
     // Check this._activated after awaiting in case deactivate() is called multiple times while
     // activate() is running. (It's OK to await a null value.)
     if (!this._activated) return;
     debug('deactivating');
-    $button.prop('disabled', true);
+    this._activated = null;
+    if (this._vad) {
+      this._vad.destroy();
+      this._vad = null;
+    }
+    this._isSpeaking = false;
+    this._peerSpeakingState.clear();
+    this._conversationGroups = [];
+    this._conversationStates = {};
+    this._monologue = null;
+    this._heldUsers = [];
+    this.hangupAll();
+    this.setStream(this.getUserId(), null);
+    const $rtcbox = $('#rtcbox');
+    $rtcbox.empty(); // In case any peer videos didn't get cleaned up for some reason.
+    $rtcbox.hide();
+    await this._trackLocks.audio.lock();
+    await this._trackLocks.video.lock();
     try {
-      this._activated = null;
-      if (this._vad) {
-        this._vad.destroy();
-        this._vad = null;
+      for (const track of this._localTracks.stream.getTracks()) {
+        this._localTracks.setTrack(track.kind, null);
       }
-      this._isSpeaking = false;
-      this._peerSpeakingState.clear();
-      this._conversationGroups = [];
-      this._conversationStates = {};
-      this._monologue = null;
-      this._heldUsers = [];
-      this.hangupAll();
-      this.setStream(this.getUserId(), null);
-      const $rtcbox = $('#rtcbox');
-      $rtcbox.empty(); // In case any peer videos didn't get cleaned up for some reason.
-      $rtcbox.hide();
-      await this._trackLocks.audio.lock();
-      await this._trackLocks.video.lock();
-      try {
-        for (const track of this._localTracks.stream.getTracks()) {
-          this._localTracks.setTrack(track.kind, null);
-        }
-        this.disposeDummyCanvasStream();
-      } finally {
-        this._trackLocks.video.unlock();
-        this._trackLocks.audio.unlock();
-      }
+      this.disposeDummyCanvasStream();
     } finally {
-      $button.prop('disabled', false);
-      this.updateCallControls();
+      this._trackLocks.video.unlock();
+      this._trackLocks.audio.unlock();
     }
     debug('deactivated');
   }

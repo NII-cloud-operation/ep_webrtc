@@ -277,10 +277,6 @@ exports.eejsBlock_padSettings = (hookName, context) => {
   }
 };
 
-exports.eejsBlock_editbarMenuRight = (hookName, context) => {
-  if (configured) context.content += eejs.require('./templates/callButton.ejs', {}, module);
-};
-
 exports.eejsBlock_styles = (hookName, context) => {
   if (!configured) return;
   context.content += eejs.require('./templates/styles.html', {}, module);

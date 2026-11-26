@@ -52,10 +52,9 @@ URL parameters and saved user preferences cannot activate it in this state.
 Sites that previously used the plugin without any configuration must now add
 an explicit configuration to retain that behavior.
 
-The pad creator can select **Allow calls in this pad** in **Pad Settings**.
-The choice is shared with everyone and saved with the pad. Turning it off ends
-the call. While calls are allowed, each participant can select **Join call**
-or **Leave call** in the toolbar. Opening a pad does not start a call.
+The pad creator can select **Enable calls in this pad** in **Pad Settings**.
+Turning it on starts the call for everyone with the pad open, including anyone
+who opens it later. Turning it off ends the call for everyone on that pad.
 
 The site's `ep_webrtc.enabled` is the initial call permission for pads with no
 saved choice (default: true). If Etherpad's pad-wide or plugin pad options are
