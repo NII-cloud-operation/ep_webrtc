@@ -83,23 +83,13 @@ class SoraClient extends EventTargetPolyfill {
   }
 
   async createAccessToken() {
-    try {
-      const req = {
-        channelId: this.channelId,
-        userDisplayName: this.userDisplayName,
-      };
-      const res = await fetch('/ep_webrtc/create-access-token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-      });
-      if (!res.ok) throw new Error('fetch error', res);
-      return await res.json();
-    } catch (err) {
-      return null;
-    }
+    const res = await fetch('/ep_webrtc/create-access-token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channelId: this.channelId, userDisplayName: this.userDisplayName}),
+    });
+    if (!res.ok) throw new Error(`Failed to get a call access token (HTTP ${res.status})`);
+    return res.json();
   }
 
   get clientId() {
