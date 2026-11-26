@@ -31,3 +31,15 @@ test.describe('ep_webrtc settingToCheckbox', () => {
     });
   }
 });
+
+test('remembers the camera background blur choice across reloads', async ({page}) => {
+  await openPad(page, {av: false});
+  const blur = page.locator('#options-backgroundblur');
+  await expect(blur).not.toBeChecked();
+  for (const enabled of [true, false]) {
+    await blur.evaluate((element: HTMLInputElement) => element.click());
+    await page.reload();
+    await page.waitForFunction(() => (window as any).$('#rtcbox').data('initialized'));
+    await expect(blur).toBeChecked({checked: enabled});
+  }
+});

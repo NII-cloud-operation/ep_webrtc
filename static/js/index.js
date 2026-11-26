@@ -317,6 +317,12 @@ exports.rtc = new class {
         defaultVal: this._settings.video.disabled === 'none',
         checkboxId: '#options-videoenabledonstart',
       });
+      this.settingToCheckbox({
+        urlVar: 'webrtcbackgroundblur',
+        cookie: 'backgroundBlur',
+        defaultVal: false,
+        checkboxId: '#options-backgroundblur',
+      });
     }
 
     const keepScreenOn = ScreenWakeLock.isStandalone(window) ||
