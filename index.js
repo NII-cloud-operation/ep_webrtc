@@ -331,6 +331,8 @@ const createSoraCompliantJWTToken = (apiKey, channelId, res) => {
       });
 };
 
+const pendingMeetingTokens = new Map();
+
 const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => {
   const url = settings.createAccessTokenUrl;
   if (!url) {
@@ -345,7 +347,7 @@ const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => 
   const body = new URLSearchParams();
   body.append('channel_name', `ep_webrtc/${channelId}`);
   body.append('user_display_name', userDisplayName);
-  fetch(url, {
+  return fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -373,7 +375,7 @@ const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => 
             error: 'Error fetching access token',
           });
         }
-        response.json()
+        return response.json()
             .then((data) => {
               logger.info(
                   '[ep_webrtc]',
@@ -481,7 +483,16 @@ exports.expressCreateServer = (hookName, args, cb) => {
         error: 'Invalid createAccessTokenType',
       });
     }
-    return fetchMeetingDevAccessToken(apiKey, channelId, userDisplayName, res);
+    // meeting.dev creates the room on the first token request. Concurrent requests can
+    // create different rooms for the same channel name.
+    while (pendingMeetingTokens.has(channelId)) await pendingMeetingTokens.get(channelId);
+    const request = fetchMeetingDevAccessToken(apiKey, channelId, userDisplayName, res);
+    pendingMeetingTokens.set(channelId, request);
+    try {
+      await request;
+    } finally {
+      pendingMeetingTokens.delete(channelId);
+    }
   });
   app.post('/ep_webrtc/:channelId/change-spotlight-rid', (req, res) => {
     if (!configured) return res.sendStatus(404);
