@@ -77,7 +77,7 @@ const defaultSettings = {
   },
 };
 let settings = null;
-// Separate site availability from the user preference in settings.enabled.
+// An empty site configuration disables the plugin on every pad.
 let configured = false;
 let padOptionsEnabled = false;
 let socketio;
@@ -129,11 +129,6 @@ const _getOrCreateGroupManager = (padId) => {
   return mgr;
 };
 
-/**
- * Handles an RTC Message
- * @param socket The socket.io Socket object for the client that sent the message.
- * @param message the message from the client
- */
 const callsAllowed = async (padId) => {
   if (!padId || !await padManager.doesPadExist(padId)) return false;
   if (!padOptionsEnabled) return settings.enabled;
@@ -141,11 +136,17 @@ const callsAllowed = async (padId) => {
   return pad.getPadSettings().ep_webrtc?.enabled ?? settings.enabled;
 };
 
+/**
+ * Handles an RTC Message
+ * @param socket The socket.io Socket object for the client that sent the message.
+ * @param message the message from the client
+ */
 const handleRTCMessage = async (socket, payload) => {
   const {[socket.id]: {author: userId, padId} = {}} = sessioninfos;
   // The handleMessage hook is executed asynchronously, so the user can disconnect between when the
   // message arrives at Etherpad and when this function is called.
   if (userId == null || !await callsAllowed(padId)) return;
+  if (sessioninfos[socket.id]?.padId !== padId) return;
 
   // Conversation audio group management (only when enabled).
   const caEnabled = (settings.conversationAudio || {}).enabled;
