@@ -52,22 +52,15 @@ URL parameters and saved user preferences cannot activate it in this state.
 Sites that previously used the plugin without any configuration must now add
 an explicit configuration to retain that behavior.
 
-When configured, the settings menu contains a toggle to turn the plugin on
-and off for the user. Its state is saved in a cookie and applied when any pad
-is visited. The value can also be changed by adding `av=true` or `av=false`
-to the URL query parameters.
+The pad creator can select **Allow calls in this pad** in **Pad Settings**.
+The choice is shared with everyone and saved with the pad. Turning it off ends
+the call. While calls are allowed, each participant can select **Join call**
+or **Leave call** in the toolbar. Opening a pad does not start a call.
 
-The `enabled` setting controls the default value of this user preference
-(it defaults to `true` within a non-empty configuration):
-
-```json
-  "ep_webrtc": {
-    "enabled": true
-  }
-```
-
-Setting `enabled` to `false` keeps the controls available but starts chat off
-by default. URL parameters and saved user preferences override this default.
+The site's `ep_webrtc.enabled` is the initial call permission for pads with no
+saved choice (default: true). If Etherpad's pad-wide or plugin pad options are
+disabled, this site default applies. Microphone, camera, and blur preferences
+remain personal.
 
 ### Video/Audio On/Off
 
@@ -104,11 +97,10 @@ Supported values for `"disabled"`:
 
 The misnamed `listenClass` setting allows you to specify a CSS selector for an
 element (or elements) that will activate the plugin when clicked. This is
-usually combined with `"enabled": false`. Example:
+available when calls are allowed in the pad. Example:
 
 ```json
   "ep_webrtc": {
-    "enabled": false,
     "listenClass": "#startVideoSessionButton"
   }
 ```

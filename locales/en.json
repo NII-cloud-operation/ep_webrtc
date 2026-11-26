@@ -1,4 +1,7 @@
 {
+    "ep_webrtc_allow_calls": "Allow calls in this pad",
+    "ep_webrtc_join_call": "Join call",
+    "ep_webrtc_leave_call": "Leave call",
     "ep_webrtc_backgroundblur": "Blur camera background",
     "ep_webrtc_blur_failed": "Background blur failed. Your camera is off.",
     "ep_webrtc_settings_enablertc": "Enable Audio/Video Chat",

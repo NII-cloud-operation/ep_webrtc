@@ -296,11 +296,12 @@ exports.rtc = new class {
         .addClass('thin-scrollbar')
         .appendTo($editorcontainerbox);
 
-    this.settingToCheckbox({
-      urlVar: 'av',
-      cookie: 'rtcEnabled',
-      defaultVal: this._settings.enabled,
-      checkboxId: '#options-enablertc',
+    $('#padsettings-enablertc').on('change', ({currentTarget}) => {
+      pad.changePadOption('ep_webrtc', {enabled: currentTarget.checked});
+    });
+    $('#rtc-call').on('click', async () => {
+      if (this._activated) await this.deactivate();
+      else await this.activate();
     });
     if (this._settings.audio.disabled !== 'hard') {
       this.settingToCheckbox({
@@ -364,21 +365,30 @@ exports.rtc = new class {
     $('#options-backgroundblur').on('change', async () => {
       if (this._activated) await this.updateLocalTracks({updateVideo: true});
     });
-    $('#options-enablertc').on('change', async (event) => {
-      if (event.currentTarget.checked) {
-        await this.activate();
-      } else {
-        await this.deactivate();
-      }
-    });
     $(window).on('beforeunload', () => { this.hangupAll(); });
     $(window).on('unload', () => { this.hangupAll(); });
-    if ($('#options-enablertc').prop('checked')) {
-      await this.activate();
-    } else {
-      await this.deactivate();
-    }
+    this.updateCallControls();
     $rtcbox.data('initialized', true); // Help tests determine when initialization is done.
+  }
+
+  callsAllowed() {
+    const option = this._pad.getPadOptions().ep_webrtc;
+    return (clientVars.enablePadWideSettings && clientVars.enablePluginPadOptions
+      ? option?.enabled : undefined) ?? this._settings.enabled;
+  }
+
+  updateCallControls() {
+    const allowed = this.callsAllowed();
+    $('#padsettings-enablertc').prop('checked', allowed);
+    $('#rtc-call-control').prop('hidden', !allowed);
+    const key = this._activated ? 'ep_webrtc_leave_call' : 'ep_webrtc_join_call';
+    $('#rtc-call').attr('data-l10n-id', key).text(html10n.get(key));
+  }
+
+  handleClientMessage_CLIENT_MESSAGE(hookName, {payload}) {
+    if (!this._pad || payload?.type !== 'padoptions' || !payload.options?.ep_webrtc) return;
+    this.updateCallControls();
+    if (!this.callsAllowed() && this._activated) void this.deactivate();
   }
 
   userJoinOrUpdate(hookName, {userInfo}) {
@@ -834,16 +844,14 @@ exports.rtc = new class {
   }
 
   async activate() {
-    if (this._settings && this._settings.configured === false) return;
+    if (!this._pad || !this.callsAllowed()) return;
     if (!this._activated) {
       this._activated = (async () => {
-        const $checkbox = $('#options-enablertc');
-        $checkbox.prop('checked', true);
+        const $button = $('#rtc-call');
         debug('activating');
-        $checkbox.prop('disabled', true);
+        $button.prop('disabled', true);
         try {
           $('#rtcbox').css('display', 'flex');
-          padcookie.setPref('rtcEnabled', true);
           this.hangupAll();
           await this.setStream(this.getUserId(), this._localTracks.stream);
           await this.updateLocalTracks({
@@ -913,8 +921,12 @@ exports.rtc = new class {
           // save my client id
           this._clientIdToUserId.set(this._soraClient.clientId, this.getUserId());
           this.publish(null, true);
+        } catch (err) {
+          await this.deactivate(false);
+          throw err;
         } finally {
-          $checkbox.prop('disabled', false);
+          $button.prop('disabled', false);
+          this.updateCallControls();
         }
         this.sendMessage(null, {requestState: true});
         debug('activated');
@@ -924,17 +936,15 @@ exports.rtc = new class {
   }
 
   async deactivate(awaitActivated = true) {
-    const $checkbox = $('#options-enablertc');
-    $checkbox.prop('checked', false);
+    const $button = $('#rtc-call');
     if (awaitActivated) await this._activated;
     // Check this._activated after awaiting in case deactivate() is called multiple times while
     // activate() is running. (It's OK to await a null value.)
     if (!this._activated) return;
     debug('deactivating');
-    $checkbox.prop('disabled', true);
+    $button.prop('disabled', true);
     try {
       this._activated = null;
-      padcookie.setPref('rtcEnabled', false);
       if (this._vad) {
         this._vad.destroy();
         this._vad = null;
@@ -962,7 +972,8 @@ exports.rtc = new class {
         this._trackLocks.audio.unlock();
       }
     } finally {
-      $checkbox.prop('disabled', false);
+      $button.prop('disabled', false);
+      this.updateCallControls();
     }
     debug('deactivated');
   }
@@ -1655,6 +1666,7 @@ exports.rtc = new class {
 
 for (const hookFn of [
   'handleClientMessage_RTC_MESSAGE',
+  'handleClientMessage_CLIENT_MESSAGE',
   'postAceInit',
   'userJoinOrUpdate',
   'userLeave',

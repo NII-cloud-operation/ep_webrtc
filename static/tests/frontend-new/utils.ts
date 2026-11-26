@@ -83,7 +83,13 @@ export const openPad = async (page: Page, params = {}, prefs = {}) => {
   await expect(acknowledge).toBeHidden();
 };
 
-export const activate = (page: Page) => page.evaluate(() => (window as any).ep_webrtc.activate());
+export const activate = async (page: Page) => {
+  await page.locator('#padsettings-enablertc').evaluate((el: HTMLInputElement) => {
+    if (!el.checked) el.click();
+  });
+  await page.locator('#rtc-call').click();
+  await expect(page.getByRole('button', {name: 'Leave call'})).toBeEnabled();
+};
 
 export const tracks = (page: Page) => page.evaluate(() => {
   const win = window as any;
