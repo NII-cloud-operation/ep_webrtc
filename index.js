@@ -18,6 +18,8 @@ const path = require('path');
 const _ = require('lodash');
 const eejs = require('ep_etherpad-lite/node/eejs/');
 const sessioninfos = require('ep_etherpad-lite/node/handler/PadMessageHandler').sessioninfos;
+const padManager = require('ep_etherpad-lite/node/db/PadManager');
+const readOnlyManager = require('ep_etherpad-lite/node/db/ReadOnlyManager').default;
 const stats = require('ep_etherpad-lite/node/stats');
 const util = require('util');
 const {SignJWT} = require('jose');
@@ -75,8 +77,9 @@ const defaultSettings = {
   },
 };
 let settings = null;
-// Separate site availability from the user preference in settings.enabled.
+// An empty site configuration disables the plugin on every pad.
 let configured = false;
+let padOptionsEnabled = false;
 let socketio;
 const padGroupManagers = new Map(); // padId -> ConversationGroupManager
 
@@ -126,16 +129,24 @@ const _getOrCreateGroupManager = (padId) => {
   return mgr;
 };
 
+const callsAllowed = async (padId) => {
+  if (!padId || !await padManager.doesPadExist(padId)) return false;
+  if (!padOptionsEnabled) return settings.enabled;
+  const pad = await padManager.getPad(padId);
+  return pad.getPadSettings().ep_webrtc?.enabled ?? settings.enabled;
+};
+
 /**
  * Handles an RTC Message
  * @param socket The socket.io Socket object for the client that sent the message.
  * @param message the message from the client
  */
-const handleRTCMessage = (socket, payload) => {
+const handleRTCMessage = async (socket, payload) => {
   const {[socket.id]: {author: userId, padId} = {}} = sessioninfos;
   // The handleMessage hook is executed asynchronously, so the user can disconnect between when the
   // message arrives at Etherpad and when this function is called.
-  if (userId == null || padId == null) return;
+  if (userId == null || !await callsAllowed(padId)) return;
+  if (sessioninfos[socket.id]?.padId !== padId) return;
 
   // Conversation audio group management (only when enabled).
   const caEnabled = (settings.conversationAudio || {}).enabled;
@@ -214,7 +225,7 @@ exports.clientVars = async (hookName, context) => ({ep_webrtc: {
 
 exports.handleMessage = async (hookName, {message, socket}) => {
   if (message.type === 'COLLABROOM' && message.data.type === 'RTC_MESSAGE') {
-    if (configured) handleRTCMessage(socket, message.data.payload);
+    if (configured) await handleRTCMessage(socket, message.data.payload);
     return [null];
   }
   if (message.type === 'STATS' && message.data.type === 'RTC_MESSAGE') {
@@ -260,12 +271,20 @@ exports.eejsBlock_mySettings = (hookName, context) => {
   }, module);
 };
 
+exports.eejsBlock_padSettings = (hookName, context) => {
+  if (configured && padOptionsEnabled) {
+    context.content += eejs.require('./templates/padSettings.ejs', {}, module);
+  }
+};
+
 exports.eejsBlock_styles = (hookName, context) => {
   if (!configured) return;
   context.content += eejs.require('./templates/styles.html', {}, module);
 };
 
-exports.loadSettings = async (hookName, {settings: {ep_webrtc: s = {}}}) => {
+exports.loadSettings = async (hookName, {settings: site}) => {
+  const s = site.ep_webrtc || {};
+  padOptionsEnabled = site.enablePadWideSettings && site.enablePluginPadOptions;
   configured = Object.keys(s).length > 0;
   settings = _.mergeWith({}, defaultSettings, s, (objV, srcV, key, obj, src) => {
     if (Array.isArray(srcV)) return _.cloneDeep(srcV); // Don't merge arrays, replace them.
@@ -312,6 +331,8 @@ const createSoraCompliantJWTToken = (apiKey, channelId, res) => {
       });
 };
 
+const pendingMeetingTokens = new Map();
+
 const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => {
   const url = settings.createAccessTokenUrl;
   if (!url) {
@@ -326,7 +347,7 @@ const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => 
   const body = new URLSearchParams();
   body.append('channel_name', `ep_webrtc/${channelId}`);
   body.append('user_display_name', userDisplayName);
-  fetch(url, {
+  return fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -354,7 +375,7 @@ const fetchMeetingDevAccessToken = (apiKey, channelId, userDisplayName, res) => 
             error: 'Error fetching access token',
           });
         }
-        response.json()
+        return response.json()
             .then((data) => {
               logger.info(
                   '[ep_webrtc]',
@@ -425,7 +446,7 @@ exports.expressCreateServer = (hookName, args, cb) => {
     if (!configured || !file) return res.sendStatus(404);
     res.sendFile(path.basename(file), {root: path.dirname(file)});
   });
-  app.post('/ep_webrtc/create-access-token', (req, res) => {
+  app.post('/ep_webrtc/create-access-token', async (req, res) => {
     if (!configured) return res.sendStatus(404);
     console.log(
         '[ep_webrtc]',
@@ -439,6 +460,11 @@ exports.expressCreateServer = (hookName, args, cb) => {
         error: 'Missing channelId',
       });
     }
+    const suffix = `@${settings.projectId}`;
+    if (typeof channelId !== 'string' || !channelId.endsWith(suffix)) return res.sendStatus(400);
+    const id = channelId.slice(0, -suffix.length);
+    const padId = readOnlyManager.isReadOnlyId(id) ? await readOnlyManager.getPadId(id) : id;
+    if (!await callsAllowed(padId)) return res.sendStatus(403);
     const createAccessTokenType = settings?.createAccessTokenType ?? 'jwt';
     const apiKey = settings?.apiKey ?? '';
     if (createAccessTokenType === 'jwt') {
@@ -457,7 +483,16 @@ exports.expressCreateServer = (hookName, args, cb) => {
         error: 'Invalid createAccessTokenType',
       });
     }
-    return fetchMeetingDevAccessToken(apiKey, channelId, userDisplayName, res);
+    // meeting.dev creates the room on the first token request. Concurrent requests can
+    // create different rooms for the same channel name.
+    while (pendingMeetingTokens.has(channelId)) await pendingMeetingTokens.get(channelId);
+    const request = fetchMeetingDevAccessToken(apiKey, channelId, userDisplayName, res);
+    pendingMeetingTokens.set(channelId, request);
+    try {
+      await request;
+    } finally {
+      pendingMeetingTokens.delete(channelId);
+    }
   });
   app.post('/ep_webrtc/:channelId/change-spotlight-rid', (req, res) => {
     if (!configured) return res.sendStatus(404);

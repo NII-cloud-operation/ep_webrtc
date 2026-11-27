@@ -1,4 +1,5 @@
 {
+    "ep_webrtc_allow_calls": "このPadで通話を有効にする",
     "ep_webrtc_backgroundblur": "カメラの背景をぼかす",
     "ep_webrtc_blur_failed": "背景をぼかせなかったため、カメラをオフにしました。",
 	"@metadata": {

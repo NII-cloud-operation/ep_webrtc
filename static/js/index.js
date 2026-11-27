@@ -237,6 +237,7 @@ exports.rtc = new class {
     // Populated with convenience methods once the self-view interface is created.
     this._selfViewButtons = {};
     // When grabbing both locks the audio lock must be grabbed first to avoid deadlock.
+    this._callSettingsLock = new Mutex();
     this._trackLocks = {audio: new Mutex(), video: new Mutex()};
     // for dummy canvas stream
     this._dummyCanvasStream = null;
@@ -296,11 +297,8 @@ exports.rtc = new class {
         .addClass('thin-scrollbar')
         .appendTo($editorcontainerbox);
 
-    this.settingToCheckbox({
-      urlVar: 'av',
-      cookie: 'rtcEnabled',
-      defaultVal: this._settings.enabled,
-      checkboxId: '#options-enablertc',
+    $('#padsettings-enablertc').on('change', ({currentTarget}) => {
+      pad.changePadOption('ep_webrtc', {enabled: currentTarget.checked});
     });
     if (this._settings.audio.disabled !== 'hard') {
       this.settingToCheckbox({
@@ -364,21 +362,34 @@ exports.rtc = new class {
     $('#options-backgroundblur').on('change', async () => {
       if (this._activated) await this.updateLocalTracks({updateVideo: true});
     });
-    $('#options-enablertc').on('change', async (event) => {
-      if (event.currentTarget.checked) {
-        await this.activate();
-      } else {
-        await this.deactivate();
-      }
-    });
     $(window).on('beforeunload', () => { this.hangupAll(); });
     $(window).on('unload', () => { this.hangupAll(); });
-    if ($('#options-enablertc').prop('checked')) {
-      await this.activate();
-    } else {
-      await this.deactivate();
-    }
+    await this.applyCallSetting();
     $rtcbox.data('initialized', true); // Help tests determine when initialization is done.
+  }
+
+  callsAllowed() {
+    const option = this._pad.getPadOptions().ep_webrtc;
+    return (clientVars.enablePadWideSettings && clientVars.enablePluginPadOptions
+      ? option?.enabled : undefined) ?? this._settings.enabled;
+  }
+
+  async applyCallSetting() {
+    await this._callSettingsLock.lock();
+    try {
+      const enabled = this.callsAllowed();
+      $('#padsettings-enablertc').prop('checked', enabled);
+      if (enabled) await this.activate();
+      else await this.deactivate();
+    } finally {
+      this._callSettingsLock.unlock();
+    }
+  }
+
+  handleClientMessage_CLIENT_MESSAGE(hookName, {payload}) {
+    if (this._pad && payload?.type === 'padoptions' && 'ep_webrtc' in payload.options) {
+      void this.applyCallSetting();
+    }
   }
 
   userJoinOrUpdate(hookName, {userInfo}) {
@@ -834,16 +845,12 @@ exports.rtc = new class {
   }
 
   async activate() {
-    if (this._settings && this._settings.configured === false) return;
+    if (!this._pad || !this.callsAllowed()) return;
     if (!this._activated) {
       this._activated = (async () => {
-        const $checkbox = $('#options-enablertc');
-        $checkbox.prop('checked', true);
         debug('activating');
-        $checkbox.prop('disabled', true);
         try {
           $('#rtcbox').css('display', 'flex');
-          padcookie.setPref('rtcEnabled', true);
           this.hangupAll();
           await this.setStream(this.getUserId(), this._localTracks.stream);
           await this.updateLocalTracks({
@@ -913,8 +920,9 @@ exports.rtc = new class {
           // save my client id
           this._clientIdToUserId.set(this._soraClient.clientId, this.getUserId());
           this.publish(null, true);
-        } finally {
-          $checkbox.prop('disabled', false);
+        } catch (err) {
+          await this.deactivate(false);
+          throw err;
         }
         this.sendMessage(null, {requestState: true});
         debug('activated');
@@ -924,45 +932,37 @@ exports.rtc = new class {
   }
 
   async deactivate(awaitActivated = true) {
-    const $checkbox = $('#options-enablertc');
-    $checkbox.prop('checked', false);
     if (awaitActivated) await this._activated;
     // Check this._activated after awaiting in case deactivate() is called multiple times while
     // activate() is running. (It's OK to await a null value.)
     if (!this._activated) return;
     debug('deactivating');
-    $checkbox.prop('disabled', true);
+    this._activated = null;
+    if (this._vad) {
+      this._vad.destroy();
+      this._vad = null;
+    }
+    this._isSpeaking = false;
+    this._peerSpeakingState.clear();
+    this._conversationGroups = [];
+    this._conversationStates = {};
+    this._monologue = null;
+    this._heldUsers = [];
+    this.hangupAll();
+    this.setStream(this.getUserId(), null);
+    const $rtcbox = $('#rtcbox');
+    $rtcbox.empty(); // In case any peer videos didn't get cleaned up for some reason.
+    $rtcbox.hide();
+    await this._trackLocks.audio.lock();
+    await this._trackLocks.video.lock();
     try {
-      this._activated = null;
-      padcookie.setPref('rtcEnabled', false);
-      if (this._vad) {
-        this._vad.destroy();
-        this._vad = null;
+      for (const track of this._localTracks.stream.getTracks()) {
+        this._localTracks.setTrack(track.kind, null);
       }
-      this._isSpeaking = false;
-      this._peerSpeakingState.clear();
-      this._conversationGroups = [];
-      this._conversationStates = {};
-      this._monologue = null;
-      this._heldUsers = [];
-      this.hangupAll();
-      this.setStream(this.getUserId(), null);
-      const $rtcbox = $('#rtcbox');
-      $rtcbox.empty(); // In case any peer videos didn't get cleaned up for some reason.
-      $rtcbox.hide();
-      await this._trackLocks.audio.lock();
-      await this._trackLocks.video.lock();
-      try {
-        for (const track of this._localTracks.stream.getTracks()) {
-          this._localTracks.setTrack(track.kind, null);
-        }
-        this.disposeDummyCanvasStream();
-      } finally {
-        this._trackLocks.video.unlock();
-        this._trackLocks.audio.unlock();
-      }
+      this.disposeDummyCanvasStream();
     } finally {
-      $checkbox.prop('disabled', false);
+      this._trackLocks.video.unlock();
+      this._trackLocks.audio.unlock();
     }
     debug('deactivated');
   }
@@ -1655,6 +1655,7 @@ exports.rtc = new class {
 
 for (const hookFn of [
   'handleClientMessage_RTC_MESSAGE',
+  'handleClientMessage_CLIENT_MESSAGE',
   'postAceInit',
   'userJoinOrUpdate',
   'userLeave',

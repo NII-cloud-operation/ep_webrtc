@@ -1,4 +1,5 @@
 {
+    "ep_webrtc_allow_calls": "Enable calls in this pad",
     "ep_webrtc_backgroundblur": "Blur camera background",
     "ep_webrtc_blur_failed": "Background blur failed. Your camera is off.",
     "ep_webrtc_settings_enablertc": "Enable Audio/Video Chat",
